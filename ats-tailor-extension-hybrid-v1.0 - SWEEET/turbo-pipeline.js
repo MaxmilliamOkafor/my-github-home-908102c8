@@ -331,6 +331,149 @@
     return distributeAllKeywords(cvText, { highPriority: highPriorityKeywords, all: highPriorityKeywords }, options);
   }
 
+  // ============ KEYWORD COVERAGE REPORT (DEBUGGING) ============
+  // Generates a detailed report of which keywords were injected and where
+  function generateKeywordCoverageReport(originalCV, tailoredCV, keywords, options = {}) {
+    const startTime = performance.now();
+    const report = {
+      timestamp: new Date().toISOString(),
+      summary: { total: 0, high: 0, medium: 0, low: 0, missing: [] },
+      keywords: {},
+      sections: {},
+      warnings: [],
+      density: { total: 0, perSection: {} }
+    };
+    
+    const allKeywords = keywords.all || [];
+    const highPriority = new Set((keywords.highPriority || []).map(k => k.toLowerCase()));
+    const mediumPriority = new Set((keywords.mediumPriority || []).map(k => k.toLowerCase()));
+    const lowPriority = new Set((keywords.lowPriority || []).map(k => k.toLowerCase()));
+    
+    // Section boundaries for location tracking
+    const sections = {
+      'SUMMARY': /professional\s*summary|summary|profile|objective/i,
+      'EXPERIENCE': /experience|work\s*experience|employment/i,
+      'SKILLS': /skills|technical\s*skills/i,
+      'EDUCATION': /education|academic/i,
+      'CERTIFICATIONS': /certifications?|licenses?/i
+    };
+    
+    const cvLower = tailoredCV.toLowerCase();
+    const originalLower = originalCV.toLowerCase();
+    
+    // Track each keyword
+    allKeywords.forEach(kw => {
+      const kwLower = kw.toLowerCase();
+      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+      
+      const originalMatches = (originalLower.match(regex) || []).length;
+      const tailoredMatches = (cvLower.match(regex) || []).length;
+      const addedCount = tailoredMatches - originalMatches;
+      
+      // Determine priority
+      let priority = 'low';
+      if (highPriority.has(kwLower)) priority = 'high';
+      else if (mediumPriority.has(kwLower)) priority = 'medium';
+      
+      // Target mentions based on best practices: 3-5 for high/medium, 1-2 for low
+      const targetMin = priority === 'low' ? 1 : 3;
+      const targetMax = priority === 'low' ? 2 : 5;
+      
+      // Find locations in CV
+      const locations = [];
+      let match;
+      const globalRegex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+      while ((match = globalRegex.exec(tailoredCV)) !== null) {
+        // Determine which section this match is in
+        let section = 'OTHER';
+        for (const [secName, secRegex] of Object.entries(sections)) {
+          const secMatch = tailoredCV.search(secRegex);
+          if (secMatch > -1 && match.index > secMatch) {
+            section = secName;
+          }
+        }
+        const context = tailoredCV.substring(Math.max(0, match.index - 30), Math.min(tailoredCV.length, match.index + kw.length + 30)).replace(/\n/g, ' ');
+        locations.push({ position: match.index, section, context: `...${context}...` });
+      }
+      
+      report.keywords[kw] = {
+        priority,
+        originalCount: originalMatches,
+        finalCount: tailoredMatches,
+        added: addedCount,
+        targetMin,
+        targetMax,
+        meetsTarget: tailoredMatches >= targetMin && tailoredMatches <= targetMax,
+        overDensity: tailoredMatches > targetMax,
+        locations
+      };
+      
+      // Update summary
+      report.summary.total++;
+      if (priority === 'high') report.summary.high++;
+      else if (priority === 'medium') report.summary.medium++;
+      else report.summary.low++;
+      
+      if (tailoredMatches < targetMin) {
+        report.summary.missing.push({ keyword: kw, priority, have: tailoredMatches, need: targetMin });
+      }
+      
+      if (tailoredMatches > targetMax) {
+        report.warnings.push(`⚠️ "${kw}" appears ${tailoredMatches}x (max ${targetMax}) - risk of over-stuffing`);
+      }
+    });
+    
+    // Calculate density
+    const wordCount = tailoredCV.split(/\s+/).length;
+    const totalKeywordOccurrences = Object.values(report.keywords).reduce((sum, k) => sum + k.finalCount, 0);
+    report.density.total = ((totalKeywordOccurrences / wordCount) * 100).toFixed(2);
+    
+    // Density warning (>5% is risky)
+    if (parseFloat(report.density.total) > 5) {
+      report.warnings.push(`⚠️ Keyword density ${report.density.total}% exceeds 5% threshold - may trigger ATS spam filters`);
+    }
+    
+    // Section breakdown
+    for (const [secName] of Object.entries(sections)) {
+      const sectionKeywords = Object.entries(report.keywords)
+        .filter(([_, v]) => v.locations.some(l => l.section === secName))
+        .map(([k, v]) => ({ keyword: k, count: v.locations.filter(l => l.section === secName).length }));
+      report.sections[secName] = sectionKeywords;
+    }
+    
+    report.timing = performance.now() - startTime;
+    
+    // Console output for debugging
+    console.log('\n═══════════════════════════════════════════════════════════════');
+    console.log('📊 KEYWORD COVERAGE REPORT');
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log(`Total Keywords: ${report.summary.total} (H:${report.summary.high} M:${report.summary.medium} L:${report.summary.low})`);
+    console.log(`Keyword Density: ${report.density.total}%`);
+    
+    console.log('\n✅ KEYWORDS MEETING TARGET (3-5x high/med, 1-2x low):');
+    Object.entries(report.keywords)
+      .filter(([_, v]) => v.meetsTarget)
+      .forEach(([k, v]) => console.log(`  ✓ ${k} (${v.priority}): ${v.finalCount}x [${v.locations.map(l => l.section).join(', ')}]`));
+    
+    console.log('\n❌ KEYWORDS BELOW TARGET:');
+    report.summary.missing.forEach(m => console.log(`  ✗ ${m.keyword} (${m.priority}): ${m.have}x (need ${m.need})`));
+    
+    if (report.warnings.length > 0) {
+      console.log('\n⚠️ WARNINGS:');
+      report.warnings.forEach(w => console.log(`  ${w}`));
+    }
+    
+    console.log('\n📍 SECTION BREAKDOWN:');
+    for (const [sec, kws] of Object.entries(report.sections)) {
+      if (kws.length > 0) {
+        console.log(`  ${sec}: ${kws.map(k => `${k.keyword}(${k.count}x)`).join(', ')}`);
+      }
+    }
+    console.log('═══════════════════════════════════════════════════════════════\n');
+    
+    return report;
+  }
+
   // ============ TURBO CV TAILORING (≤50ms - LAZYAPPLY 3X) ============
   async function turboTailorCV(cvText, keywords, options = {}) {
     const startTime = performance.now();
@@ -582,6 +725,8 @@
     turboExtractKeywords,
     turboTailorCV,
     distributeHighPriorityKeywords,
+    distributeAllKeywords,
+    generateKeywordCoverageReport,
     TIMING_TARGETS,
     clearCache: () => keywordCache.clear(),
     getCacheSize: () => keywordCache.size
