@@ -170,25 +170,35 @@
     };
   }
 
-  // ============ HIGH PRIORITY KEYWORD DISTRIBUTION (3-5x mentions) ============
-  // CRITICAL FIX: Distribute high priority keywords 3-5 times across Work Experience bullets
-  // Distribution strategy: Solim (2-3x), Meta (1-2x), Accenture (1x), Citigroup (1x)
-  function distributeHighPriorityKeywords(cvText, highPriorityKeywords, options = {}) {
+  // ============ ALL KEYWORDS DISTRIBUTION (3-5x mentions for HIGH/MEDIUM, 1-2x for LOW) ============
+  // CRITICAL FIX: Distribute ALL keywords naturally across Work Experience bullets
+  // High Priority: 3-5 mentions, Medium Priority: 3-5 mentions, Low Priority: 1-2 mentions
+  // Distribution strategy: More recent roles get more keywords
+  function distributeAllKeywords(cvText, keywords, options = {}) {
     const startTime = performance.now();
-    const { maxBulletsPerRole = 8, targetMentions = 4, minMentions = 3, maxMentions = 5 } = options;
+    const { maxBulletsPerRole = 8, highMinMentions = 3, highMaxMentions = 5, medMinMentions = 3, medMaxMentions = 5, lowMinMentions = 1, lowMaxMentions = 2 } = options;
     
-    if (!cvText || !highPriorityKeywords?.length) {
+    const highPriorityKeywords = keywords.highPriority || [];
+    const mediumPriorityKeywords = keywords.mediumPriority || [];
+    const lowPriorityKeywords = keywords.lowPriority || [];
+    const allKeywords = keywords.all || [...highPriorityKeywords, ...mediumPriorityKeywords, ...lowPriorityKeywords];
+    
+    if (!cvText || allKeywords.length === 0) {
       return { tailoredCV: cvText, distributionStats: {}, timing: 0 };
     }
 
     let tailoredCV = cvText;
     const stats = {};
     
-    // Initialize stats: count existing mentions of each keyword
-    highPriorityKeywords.forEach(kw => {
+    // Initialize stats: count existing mentions of each keyword with priority info
+    allKeywords.forEach(kw => {
       const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
       const existingMentions = (cvText.match(regex) || []).length;
-      stats[kw] = { mentions: existingMentions, roles: [], target: targetMentions, added: 0 };
+      const priority = highPriorityKeywords.includes(kw) ? 'high' : 
+                       mediumPriorityKeywords.includes(kw) ? 'medium' : 'low';
+      const targetMentions = priority === 'low' ? lowMinMentions : highMinMentions;
+      const maxMentions = priority === 'low' ? lowMaxMentions : highMaxMentions;
+      stats[kw] = { mentions: existingMentions, roles: [], target: targetMentions, max: maxMentions, added: 0, priority };
     });
 
     // Find Work Experience section boundaries
@@ -207,10 +217,10 @@
     
     // Role-based distribution targets (more recent roles get more keywords)
     const roleTargets = [
-      { name: 'Meta (Role 1)', maxKeywordsPerBullet: 2, maxBullets: 5 },
-      { name: 'Solim (Role 2)', maxKeywordsPerBullet: 2, maxBullets: 4 },
-      { name: 'Accenture (Role 3)', maxKeywordsPerBullet: 1, maxBullets: 3 },
-      { name: 'Citigroup (Role 4)', maxKeywordsPerBullet: 1, maxBullets: 2 }
+      { name: 'Role 1 (Most Recent)', maxKeywordsPerBullet: 3, maxBullets: 6 },
+      { name: 'Role 2', maxKeywordsPerBullet: 3, maxBullets: 5 },
+      { name: 'Role 3', maxKeywordsPerBullet: 2, maxBullets: 4 },
+      { name: 'Role 4', maxKeywordsPerBullet: 2, maxBullets: 3 }
     ];
     
     // Natural injection phrases (varied for authenticity)
@@ -257,11 +267,12 @@
         continue;
       }
       
-      // Find keywords that need more mentions (below minMentions target)
-      const needsMore = highPriorityKeywords.filter(kw => {
+      // Find ALL keywords (high, medium, low) that need more mentions (below minMentions target)
+      const needsMore = allKeywords.filter(kw => {
         const current = stats[kw].mentions;
+        const target = stats[kw].target;
         const inLine = line.toLowerCase().includes(kw.toLowerCase());
-        return current < minMentions && !inLine;
+        return current < target && !inLine;
       });
       
       if (needsMore.length === 0) {
@@ -269,13 +280,23 @@
         continue;
       }
       
-      // Inject 1-2 keywords per bullet based on role config
-      const toInject = needsMore.slice(0, roleConfig.maxKeywordsPerBullet);
+      // Prioritize high > medium > low when selecting keywords to inject
+      const highToInject = needsMore.filter(kw => stats[kw].priority === 'high');
+      const medToInject = needsMore.filter(kw => stats[kw].priority === 'medium');
+      const lowToInject = needsMore.filter(kw => stats[kw].priority === 'low');
+      
+      // Inject up to maxKeywordsPerBullet, prioritizing high, then medium, then low
+      const toInject = [
+        ...highToInject.slice(0, roleConfig.maxKeywordsPerBullet),
+        ...medToInject.slice(0, Math.max(0, roleConfig.maxKeywordsPerBullet - highToInject.length)),
+        ...lowToInject.slice(0, Math.max(0, roleConfig.maxKeywordsPerBullet - highToInject.length - medToInject.length))
+      ].slice(0, roleConfig.maxKeywordsPerBullet);
+      
       let enhanced = line;
       
       toInject.forEach(kw => {
-        // Only inject if we haven't exceeded maxMentions
-        if (stats[kw].mentions >= maxMentions) return;
+        // Only inject if we haven't exceeded maxMentions for this keyword
+        if (stats[kw].mentions >= stats[kw].max) return;
         
         const phrase = getPhrase();
         if (enhanced.endsWith('.')) {
@@ -295,10 +316,19 @@
     tailoredCV = tailoredCV.substring(0, expStart) + experienceSection + tailoredCV.substring(expEnd);
 
     const timing = performance.now() - startTime;
-    console.log(`[TurboPipeline] High Priority distribution in ${timing.toFixed(0)}ms:`, 
-      Object.entries(stats).map(([k, v]) => `${k}: ${v.mentions}x (added ${v.added})`).join(', '));
+    const summary = Object.entries(stats)
+      .filter(([_, v]) => v.added > 0)
+      .map(([k, v]) => `${k}(${v.priority}): ${v.mentions}x`)
+      .slice(0, 10)
+      .join(', ');
+    console.log(`[TurboPipeline] All Keywords distribution in ${timing.toFixed(0)}ms: ${summary}${Object.keys(stats).length > 10 ? '...' : ''}`);
     
     return { tailoredCV, distributionStats: stats, timing };
+  }
+  
+  // Backward compatibility alias
+  function distributeHighPriorityKeywords(cvText, highPriorityKeywords, options = {}) {
+    return distributeAllKeywords(cvText, { highPriority: highPriorityKeywords, all: highPriorityKeywords }, options);
   }
 
   // ============ TURBO CV TAILORING (≤50ms - LAZYAPPLY 3X) ============
@@ -338,11 +368,16 @@
       injected = result.injectedKeywords;
     }
 
-    // HIGH PRIORITY DISTRIBUTION (3-5x mentions)
-    if (keywords.highPriority?.length > 0) {
-      const distResult = distributeHighPriorityKeywords(tailoredCV, keywords.highPriority, {
-        maxBulletsPerRole: 6, // Reduced for speed
-        targetMentions: 3     // Reduced for speed
+    // ALL KEYWORDS DISTRIBUTION (3-5x mentions for high/medium, 1-2x for low)
+    if (keywords.all?.length > 0 || keywords.highPriority?.length > 0) {
+      const distResult = distributeAllKeywords(tailoredCV, keywords, {
+        maxBulletsPerRole: 6,
+        highMinMentions: 3,
+        highMaxMentions: 5,
+        medMinMentions: 3,
+        medMaxMentions: 5,
+        lowMinMentions: 1,
+        lowMaxMentions: 2
       });
       tailoredCV = distResult.tailoredCV;
     }

@@ -282,27 +282,33 @@
       return entries;
     },
 
-    // ============ TAILOR CV DATA WITH KEYWORDS ============
+    // ============ TAILOR CV DATA WITH ALL KEYWORDS (100% MATCH) ============
     tailorCVData(cvData, keywords, jobData) {
       const tailored = JSON.parse(JSON.stringify(cvData)); // Deep clone
-      const highPriority = keywords.highPriority || keywords.slice(0, 15);
-      const allKeywords = keywords.all || keywords;
+      
+      // Support both array and structured keywords
+      const allKeywords = keywords.all || keywords || [];
+      const highPriority = keywords.highPriority || allKeywords.slice(0, 15);
+      const mediumPriority = keywords.mediumPriority || [];
+      const lowPriority = keywords.lowPriority || [];
 
       // 1. Update location to job location
       if (jobData?.location) {
         tailored.contact.location = this.normalizeLocation(jobData.location);
       }
 
-      // 2. Enhance summary with top 3-5 keywords
-      tailored.summary = this.enhanceSummary(cvData.summary, highPriority.slice(0, 5));
+      // 2. Enhance summary with top 5-8 keywords
+      tailored.summary = this.enhanceSummary(cvData.summary, [...highPriority.slice(0, 5), ...mediumPriority.slice(0, 3)]);
 
-      // 3. Inject keywords into experience (3-5x distribution)
-      tailored.experience = this.injectKeywordsIntoExperience(cvData.experience, highPriority, {
-        minMentions: 3,
-        maxMentions: 5
+      // 3. Inject ALL keywords into experience (3-5x distribution for high/medium, 1-2x for low)
+      tailored.experience = this.injectAllKeywordsIntoExperience(cvData.experience, {
+        high: highPriority,
+        medium: mediumPriority,
+        low: lowPriority,
+        all: allKeywords
       });
 
-      // 4. Merge keywords into skills
+      // 4. Merge ALL keywords into skills
       tailored.skills = this.mergeSkills(cvData.skills, allKeywords);
 
       return tailored;
@@ -339,19 +345,36 @@
       return summary;
     },
 
-    // ============ INJECT KEYWORDS INTO EXPERIENCE (AGGRESSIVE - 3-5x distribution) ============
-    injectKeywordsIntoExperience(experience, keywords, options = {}) {
-      const { minMentions = 3, maxMentions = 5 } = options;
+    // ============ INJECT ALL KEYWORDS INTO EXPERIENCE (100% MATCH) ============
+    // High/Medium: 3-5x mentions, Low: 1-2x mentions
+    injectAllKeywordsIntoExperience(experience, keywordsByPriority) {
       if (!experience || experience.length === 0) return experience;
+      
+      const { high = [], medium = [], low = [], all = [] } = keywordsByPriority;
+      const allKeywords = all.length > 0 ? all : [...high, ...medium, ...low];
 
-      // Track keyword mentions
+      // Track keyword mentions with priority-based targets
       const mentions = {};
-      keywords.forEach(kw => mentions[kw] = 0);
+      const targets = {};
+      const maxMentions = {};
+      
+      high.forEach(kw => { mentions[kw] = 0; targets[kw] = 3; maxMentions[kw] = 5; });
+      medium.forEach(kw => { mentions[kw] = 0; targets[kw] = 3; maxMentions[kw] = 5; });
+      low.forEach(kw => { mentions[kw] = 0; targets[kw] = 1; maxMentions[kw] = 2; });
+      
+      // For keywords not categorized, default to medium priority targets
+      allKeywords.forEach(kw => {
+        if (mentions[kw] === undefined) {
+          mentions[kw] = 0;
+          targets[kw] = 2;
+          maxMentions[kw] = 3;
+        }
+      });
 
       // Count existing mentions
       experience.forEach(job => {
         job.bullets.forEach(bullet => {
-          keywords.forEach(kw => {
+          allKeywords.forEach(kw => {
             if (bullet.toLowerCase().includes(kw.toLowerCase())) {
               mentions[kw]++;
             }
@@ -368,25 +391,36 @@
 
       // AGGRESSIVE injection: process all bullets, inject until all keywords have enough mentions
       return experience.map((job, jobIndex) => {
+        // More keywords in recent roles
+        const maxKeywordsPerBullet = Math.max(2, 4 - jobIndex);
+        
         const enhancedBullets = job.bullets.map((bullet) => {
           // Find keywords that need more mentions AND aren't in this bullet
-          const needsMore = keywords.filter(kw => {
+          // Prioritize high > medium > low
+          const needsMore = allKeywords.filter(kw => {
             const current = mentions[kw];
+            const target = targets[kw] || 2;
             const inBullet = bullet.toLowerCase().includes(kw.toLowerCase());
-            return current < minMentions && !inBullet;
+            return current < target && !inBullet;
           });
 
           if (needsMore.length === 0) return bullet;
 
           let enhanced = bullet;
           
-          // Inject up to 2 keywords per bullet for natural reading
-          const toInject = needsMore.slice(0, 2);
+          // Sort by priority: high first
+          const sorted = [
+            ...needsMore.filter(kw => high.includes(kw)),
+            ...needsMore.filter(kw => medium.includes(kw)),
+            ...needsMore.filter(kw => low.includes(kw))
+          ];
+          
+          // Inject up to maxKeywordsPerBullet keywords per bullet
+          const toInject = sorted.slice(0, maxKeywordsPerBullet);
           
           toInject.forEach(kw => {
-            if (mentions[kw] >= maxMentions) return;
+            if (mentions[kw] >= (maxMentions[kw] || 5)) return;
             
-            // Multiple injection strategies for guaranteed insertion
             const kwLower = kw.toLowerCase();
             const enhancedLower = enhanced.toLowerCase();
             
@@ -428,6 +462,11 @@
 
         return { ...job, bullets: enhancedBullets };
       });
+    },
+    
+    // Legacy function for backward compatibility
+    injectKeywordsIntoExperience(experience, keywords, options = {}) {
+      return this.injectAllKeywordsIntoExperience(experience, { high: keywords, all: keywords });
     },
 
     // ============ MERGE SKILLS WITH KEYWORDS ============

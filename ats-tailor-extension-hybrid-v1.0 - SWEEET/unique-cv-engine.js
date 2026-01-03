@@ -134,29 +134,38 @@
     };
   }
 
-  // ============ GENERATE UNIQUE BULLET (JOB-TAILORED) ============
-  function generateUniqueBullet(originalBullet, jobKeywords, usedKeywords, templateIndex) {
-    if (!originalBullet || !jobKeywords?.length) return originalBullet.text || originalBullet;
+  // ============ GENERATE UNIQUE BULLET (JOB-TAILORED - AGGRESSIVE INJECTION) ============
+  function generateUniqueBullet(originalBullet, allKeywords, usedKeywords, templateIndex, priorityMap = {}) {
+    if (!originalBullet || !allKeywords?.length) return originalBullet.text || originalBullet;
 
     const bulletText = originalBullet.text || originalBullet;
     const metrics = originalBullet.metrics || extractMetrics(bulletText);
     const bulletLower = bulletText.toLowerCase();
 
-    // Find keywords NOT already in this bullet
-    const availableKeywords = jobKeywords.filter(kw => 
-      !bulletLower.includes(kw.toLowerCase()) && !usedKeywords.has(kw.toLowerCase())
+    // Find keywords NOT already in this bullet (include all priority levels)
+    const availableKeywords = allKeywords.filter(kw => 
+      !bulletLower.includes(kw.toLowerCase())
     );
+    
+    // Sort by priority: high first, then medium, then low
+    const sortedAvailable = availableKeywords.sort((a, b) => {
+      const aPriority = priorityMap[a.toLowerCase()] || 'low';
+      const bPriority = priorityMap[b.toLowerCase()] || 'low';
+      const order = { high: 0, medium: 1, low: 2 };
+      return order[aPriority] - order[bPriority];
+    });
 
-    if (availableKeywords.length === 0) return bulletText;
+    if (sortedAvailable.length === 0) return bulletText;
 
-    // Select 1-2 keywords to inject
-    const keywordsToInject = availableKeywords.slice(0, CONFIG.MAX_KEYWORDS_PER_BULLET);
+    // Select 2-3 keywords to inject per bullet (more aggressive)
+    const maxToInject = Math.min(3, CONFIG.MAX_KEYWORDS_PER_BULLET + 1);
+    const keywordsToInject = sortedAvailable.slice(0, maxToInject);
     const phrase = INJECTION_PHRASES[Math.floor(Math.random() * INJECTION_PHRASES.length)];
 
     // Track used keywords
     keywordsToInject.forEach(kw => usedKeywords.add(kw.toLowerCase()));
 
-    // PRESERVE original achievement and metrics, just prepend/inject keyword
+    // PRESERVE original achievement and metrics, inject keywords naturally
     let enhanced = bulletText;
     
     // Strategy 1: Inject after first clause
@@ -183,11 +192,25 @@
     return enhanced;
   }
 
-  // ============ GENERATE UNIQUE CV FOR JOB ============
+  // ============ GENERATE UNIQUE CV FOR JOB (ALL KEYWORDS - 100% MATCH) ============
   function generateUniqueCVForJob(cvText, jobKeywords, candidateData = {}) {
     const startTime = performance.now();
     
-    if (!cvText || !jobKeywords?.length) {
+    // Support both array of keywords and structured keyword object
+    let allKeywords = [];
+    let priorityMap = {};
+    
+    if (Array.isArray(jobKeywords)) {
+      allKeywords = jobKeywords;
+    } else if (jobKeywords?.all) {
+      allKeywords = jobKeywords.all;
+      // Build priority map for sorting
+      (jobKeywords.highPriority || []).forEach(kw => priorityMap[kw.toLowerCase()] = 'high');
+      (jobKeywords.mediumPriority || []).forEach(kw => priorityMap[kw.toLowerCase()] = 'medium');
+      (jobKeywords.lowPriority || []).forEach(kw => priorityMap[kw.toLowerCase()] = 'low');
+    }
+    
+    if (!cvText || allKeywords.length === 0) {
       return { uniqueCV: cvText, stats: {}, timing: 0 };
     }
 
@@ -199,30 +222,43 @@
       keywordsInjected: 0,
       preservedCompanies: [],
       preservedTitles: [],
-      preservedMetrics: []
+      preservedMetrics: [],
+      keywordCoverage: { high: 0, medium: 0, low: 0 }
     };
 
     // Process each role - PRESERVE company, title, dates; MODIFY bullets only
+    // More aggressive injection: inject into ALL bullets until all keywords are covered
     const modifiedRoles = parsed.rawRoles.map((role, roleIdx) => {
       stats.rolesProcessed++;
       stats.preservedCompanies.push(role.company);
       stats.preservedTitles.push(role.title);
 
       // Role weight: more recent roles get more keywords
-      const roleWeight = Math.max(1, 4 - roleIdx); // 4, 3, 2, 1 for first 4 roles
-      const keywordsForRole = jobKeywords.slice(0, 5 * roleWeight);
+      const roleWeight = Math.max(1, 5 - roleIdx); // 5, 4, 3, 2, 1 for first 5 roles
+      
+      // All roles get access to all keywords - we want 100% coverage
+      const keywordsForRole = allKeywords;
 
       const modifiedBullets = role.originalBullets.map((bullet, bulletIdx) => {
         // Preserve metrics in stats
         bullet.metrics.forEach(m => stats.preservedMetrics.push(m));
 
-        // Only modify if we haven't hit our keyword distribution target
-        if (usedKeywords.size >= jobKeywords.length * 0.8) return bullet.text;
-
-        const enhanced = generateUniqueBullet(bullet, keywordsForRole, usedKeywords, bulletIdx);
+        // Inject into EVERY bullet until we hit 100% keyword coverage
+        const enhanced = generateUniqueBullet(bullet, keywordsForRole, usedKeywords, bulletIdx, priorityMap);
         if (enhanced !== bullet.text) {
           stats.bulletsModified++;
-          stats.keywordsInjected += Math.min(2, keywordsForRole.length);
+          
+          // Count injected keywords by priority
+          const injected = allKeywords.filter(kw => 
+            enhanced.toLowerCase().includes(kw.toLowerCase()) && 
+            !bullet.text.toLowerCase().includes(kw.toLowerCase())
+          );
+          stats.keywordsInjected += injected.length;
+          
+          injected.forEach(kw => {
+            const priority = priorityMap[kw.toLowerCase()] || 'low';
+            stats.keywordCoverage[priority]++;
+          });
         }
         return enhanced;
       });
@@ -237,7 +273,8 @@
     const uniqueCV = reconstructCVWithModifiedBullets(parsed, modifiedRoles);
 
     const timing = performance.now() - startTime;
-    console.log(`[UniqueCVEngine] Generated unique CV in ${timing.toFixed(0)}ms:`, stats);
+    console.log(`[UniqueCVEngine] Generated unique CV in ${timing.toFixed(0)}ms:`, 
+      `${stats.keywordsInjected} keywords injected (H:${stats.keywordCoverage.high} M:${stats.keywordCoverage.medium} L:${stats.keywordCoverage.low})`);
 
     return {
       uniqueCV,
