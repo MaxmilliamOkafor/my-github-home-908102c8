@@ -1,7 +1,7 @@
 // content.js - HYBRID v1.4.0 - OpenResume ATS CV + Cover Letter Generator
 // FEATURES: OpenResume-style perfect ATS format, 100% parsing, dual PDF generation
 // SPEED: INSTANT 175ms pipeline - 0ms detect → 25ms banner → 50ms AUTO-CLICK → 175ms complete
-// OUTPUT: {FirstName}_{LastName}_ATS_CV.pdf + {FirstName}_{LastName}_Cover_Letter.pdf
+// OUTPUT: {FirstName}_{LastName}_CV.pdf + {FirstName}_{LastName}_Cover_Letter.pdf
 // UNIQUE CV: Preserves user's companies/roles/dates, modifies only bullet phrasing per job
 
 (function() {
@@ -923,7 +923,7 @@
 
         cvResult = {
           pdf: result.resumePdf,
-          filename: result.cvFileName || `${candidateData.firstName}_${candidateData.lastName}_ATS_CV.pdf`
+          filename: result.cvFileName || `${candidateData.firstName}_${candidateData.lastName}_CV.pdf`
         };
         
         coverResult = {
