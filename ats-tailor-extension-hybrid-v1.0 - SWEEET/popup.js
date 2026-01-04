@@ -1703,7 +1703,15 @@ class ATSTailor {
       const p = profileRows?.[0] || {};
 
       // Apply user location rules for tailoring/output
-      this._defaultLocation = (p.state || [p.city, p.country].filter(Boolean).join(', ') || 'Dublin, IE').trim() || 'Dublin, IE';
+      // IMPORTANT: never include "Remote" in the candidate location line.
+      const rawCity = String(p.city || '').split('|')[0].trim();
+      const rawCountry = String(p.country || '').trim();
+      const country = rawCountry && rawCountry.toLowerCase() === 'ireland' ? 'IE' : rawCountry;
+      const base = [rawCity, country].filter(Boolean).join(', ').trim();
+      this._defaultLocation = (/\bremote\b/i.test(String(p.city || '')) || /\bdublin\b/i.test(rawCity))
+        ? 'Dublin, IE'
+        : (base || 'Dublin, IE');
+
       const effectiveJobLocation = window.ATSLocationTailor?.normalizeJobLocationForApplication
         ? window.ATSLocationTailor.normalizeJobLocationForApplication(this.currentJob.location || '', this._defaultLocation)
         : (this.currentJob.location || this._defaultLocation);
@@ -1742,7 +1750,7 @@ class ATSTailor {
             certifications: Array.isArray(p.certifications) ? p.certifications : [],
             achievements: Array.isArray(p.achievements) ? p.achievements : [],
             atsStrategy: p.ats_strategy || '',
-            city: p.city || undefined,
+            city: this._defaultLocation,
             country: p.country || undefined,
             address: p.address || undefined,
             state: p.state || undefined,
