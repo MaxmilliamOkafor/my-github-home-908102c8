@@ -393,58 +393,11 @@
     return attached;
   }
 
-  // ============ GREENHOUSE COVER LETTER ATTACH BUTTON CLICK ============
-  let coverAttachClicked = false;
-  
-  async function clickGreenhouseCoverAttach() {
-    // Only click once to prevent repeated button clicks
-    if (coverAttachClicked) return false;
-    
-    // Find the Cover Letter section by label text
-    const allLabels = document.querySelectorAll('label, h3, h4, span, div, fieldset');
-    for (const label of allLabels) {
-      const text = (label.textContent || '').trim().toLowerCase();
-      if (text.includes('cover letter') && text.length < 30) {
-        // Found Cover Letter label - look for "Attach" button nearby
-        const container = label.closest('fieldset') || label.closest('.field') || label.closest('section') || label.parentElement?.parentElement?.parentElement;
-        if (!container) continue;
-        
-        // Look for Attach button (first option in Greenhouse)
-        const buttons = container.querySelectorAll('button, a[role="button"], [class*="attach"]');
-        for (const btn of buttons) {
-          const btnText = (btn.textContent || '').trim().toLowerCase();
-          if (btnText === 'attach' || btnText.includes('attach')) {
-            console.log('[ATS Tailor] 📎 Clicking Greenhouse Cover Letter "Attach" button');
-            try { 
-              btn.click();
-              coverAttachClicked = true;
-              // Wait for file input to appear
-              await sleep(150);
-              return true;
-            } catch (e) {
-              console.warn('[ATS Tailor] Failed to click Attach button:', e);
-            }
-          }
-        }
-      }
-    }
-    return false;
-  }
-
-  // ============ FORCE COVER REPLACE (MATCHES WORKING EXTENSION) ==========
-  async function forceCoverReplace() {
+  // ============ FORCE COVER REPLACE (BOTH-ATTACH PROVEN LOGIC) ==========
+  // Keep this synchronous and simple; no platform-specific "Attach" button clicks.
+  function forceCoverReplace() {
     if (!coverFile && !coverLetterText) return false;
     let attached = false;
-
-    // GREENHOUSE FIX: Click "Attach" button first to reveal hidden file input
-    await clickGreenhouseCoverAttach();
-
-    // Make hidden file inputs visible
-    document.querySelectorAll('input[type="file"]').forEach(input => {
-      if (input.offsetParent === null) {
-        input.style.cssText = 'display:block !important; visibility:visible !important; opacity:0.01 !important; position:absolute !important; pointer-events:auto !important;';
-      }
-    });
 
     if (coverFile) {
       document.querySelectorAll('input[type="file"]').forEach((input) => {
@@ -463,29 +416,6 @@
         attached = true;
         updateStatus('cover', '✅');
         console.log('[ATS Tailor] Cover Letter attached!');
-      });
-    }
-    
-    // If no cover field found, wait and retry with broader search
-    if (!attached && coverFile) {
-      await sleep(200);
-      
-      // Re-check for any new file inputs that appeared
-      document.querySelectorAll('input[type="file"]').forEach((input) => {
-        if (attached) return;
-        if (!isCoverField(input)) return;
-        if (input.files && input.files.length > 0) {
-          attached = true;
-          return;
-        }
-
-        const dt = new DataTransfer();
-        dt.items.add(coverFile);
-        input.files = dt.files;
-        fireEvents(input);
-        attached = true;
-        updateStatus('cover', '✅');
-        console.log('[ATS Tailor] Cover Letter attached (retry)!');
       });
     }
 
@@ -528,9 +458,7 @@
     
     // STEP 3: Attach files
     forceCVReplace();
-    // forceCoverReplace is async in this hybrid build; we intentionally do not await here
-    // to match the proven both-attach "retry loop" behavior.
-    try { void forceCoverReplace(); } catch {}
+    forceCoverReplace();
   }
 
   // ============ TURBO-FAST REPLACE LOOP (BOTH-ATTACH PROVEN) ============
@@ -566,7 +494,7 @@
     attachLoop200ms = setInterval(() => {
       if (!filesLoaded) return;
       forceCVReplace();
-      try { void forceCoverReplace(); } catch {}
+      forceCoverReplace();
 
       if (areBothAttached()) {
         console.log('[ATS Tailor] Attach complete — stopping loops');
@@ -806,6 +734,19 @@
       updateBanner(`Generating ATS CV (${localKeywords.all?.length || 0} keywords)...`, 'extracting');
 
       // STEP 2: Build candidate data for OpenResume generator
+      // IMPORTANT: Never include "Remote" in the candidate location line (recruiter red flag).
+      const defaultLocation = (() => {
+        const rawCity = String(p.city || '').split('|')[0].trim();
+        const rawCountry = String(p.country || '').trim();
+        const country = rawCountry && rawCountry.toLowerCase() === 'ireland' ? 'IE' : rawCountry;
+
+        // Force your requested default format when city is Dublin (or when Remote is present)
+        if (/\bdublin\b/i.test(rawCity) || /\bremote\b/i.test(String(p.city || ''))) return 'Dublin, IE';
+
+        const combined = [rawCity, country].filter(Boolean).join(', ').trim();
+        return combined || 'Dublin, IE';
+      })();
+
       const candidateData = {
         firstName: p.first_name || '',
         lastName: p.last_name || '',
@@ -814,8 +755,8 @@
         linkedin: p.linkedin || '',
         github: p.github || '',
         portfolio: p.portfolio || '',
-        city: p.city || '',
-        location: p.city || '',
+        city: defaultLocation,
+        location: defaultLocation,
         workExperience: Array.isArray(p.work_experience) ? p.work_experience : [],
         education: Array.isArray(p.education) ? p.education : [],
         skills: Array.isArray(p.skills) ? p.skills : [],
@@ -825,7 +766,6 @@
       };
 
       // Apply user location rules (Remote keeps default; bare USA -> California)
-      const defaultLocation = (p.state || [p.city, p.country].filter(Boolean).join(', ') || 'Dublin, IE').trim() || 'Dublin, IE';
       if (window.ATSLocationTailor?.normalizeJobLocationForApplication) {
         jobInfo.location = window.ATSLocationTailor.normalizeJobLocationForApplication(jobInfo.location || '', defaultLocation);
       } else if (!jobInfo.location) {
