@@ -51,6 +51,10 @@ class ATSTailor {
     this.jdCache = new Map(); // url -> { jd, timestamp }
     this.keywordCache = new Map(); // url -> { keywords, timestamp }
     
+    // Keyword coverage report (diffs original CV vs boosted CV)
+    this._coverageOriginalCV = '';
+    this._defaultLocation = 'Dublin, IE';
+    
     // DOM element references (query once, reuse)
     this._domRefs = {};
 
@@ -169,11 +173,12 @@ class ATSTailor {
     document.getElementById('downloadCover')?.addEventListener('click', () => this.downloadDocument('cover'));
     document.getElementById('attachBoth')?.addEventListener('click', () => this.attachBothDocuments());
     document.getElementById('copyContent')?.addEventListener('click', () => this.copyCurrentContent());
+    document.getElementById('copyCoverageBtn')?.addEventListener('click', () => this.copyCoverageReport());
     
     // NEW: Text download buttons
     document.getElementById('downloadCvText')?.addEventListener('click', () => this.downloadTextVersion('cv'));
     document.getElementById('downloadCoverText')?.addEventListener('click', () => this.downloadTextVersion('cover'));
-    
+
     // Bulk Apply Dashboard
     document.getElementById('openBulkApply')?.addEventListener('click', () => {
       chrome.tabs.create({ url: chrome.runtime.getURL('bulk-apply.html') });
@@ -682,6 +687,9 @@ class ATSTailor {
       };
       this.batchUpdateKeywordChips(fallbackObj, cvText, matchedKeywords);
     }
+
+    // NEW: Keyword coverage debug panel (injected locations)
+    this.updateKeywordCoverageUI();
   }
 
   /**
@@ -757,6 +765,130 @@ class ATSTailor {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  compactCoverageReport(report) {
+    if (!report || !report.keywords) return null;
+
+    const compact = {
+      timestamp: report.timestamp,
+      summary: report.summary,
+      warnings: report.warnings,
+      density: report.density,
+      keywords: {},
+    };
+
+    for (const [keyword, data] of Object.entries(report.keywords)) {
+      compact.keywords[keyword] = {
+        priority: data.priority,
+        finalCount: data.finalCount,
+        targetMin: data.targetMin,
+        targetMax: data.targetMax,
+        meetsTarget: data.meetsTarget,
+        overDensity: data.overDensity,
+        locations: (data.locations || []).slice(0, 6).map((l) => ({
+          section: l.section,
+          context: l.context,
+        })),
+      };
+    }
+
+    return compact;
+  }
+
+  buildKeywordCoverageReport(keywords) {
+    try {
+      const originalCV = this._coverageOriginalCV || '';
+      const tailoredCV = this.generatedDocuments.cv || '';
+      if (!originalCV || !tailoredCV || !keywords?.all?.length) return;
+
+      if (!window.TurboPipeline?.generateKeywordCoverageReport) return;
+
+      const report = window.TurboPipeline.generateKeywordCoverageReport(originalCV, tailoredCV, keywords);
+      const compact = this.compactCoverageReport(report);
+      if (compact) {
+        this.generatedDocuments.coverageReport = compact;
+      }
+    } catch (e) {
+      console.warn('[ATS Tailor] Failed to build keyword coverage report:', e);
+    }
+  }
+
+  updateKeywordCoverageUI() {
+    const container = document.getElementById('coverageContainer');
+    if (!container) return;
+
+    const report = this.generatedDocuments.coverageReport;
+    if (!report?.keywords) {
+      container.classList.add('hidden');
+      return;
+    }
+
+    container.classList.remove('hidden');
+
+    const groups = { high: [], medium: [], low: [] };
+    for (const [keyword, data] of Object.entries(report.keywords)) {
+      const priority = data.priority || 'low';
+      (groups[priority] || groups.low).push({ keyword, ...data });
+    }
+
+    const render = (items, listId, countId) => {
+      const list = document.getElementById(listId);
+      const countEl = document.getElementById(countId);
+      if (!list) return;
+
+      const total = items.length;
+      const ok = items.filter((i) => i.meetsTarget).length;
+      if (countEl) countEl.textContent = `${ok}/${total}`;
+
+      const html = items
+        .sort((a, b) => (b.finalCount || 0) - (a.finalCount || 0))
+        .map((i) => {
+          const status = i.overDensity ? 'over' : (i.meetsTarget ? 'ok' : 'under');
+          const badge = i.overDensity ? 'OVER' : (i.meetsTarget ? 'OK' : 'LOW');
+          const sections = Array.from(new Set((i.locations || []).map((l) => l.section))).filter(Boolean);
+
+          const details = (i.locations || []).slice(0, 6).map((l) => {
+            const sec = this.escapeHtml(l.section || 'OTHER');
+            const ctx = this.escapeHtml((l.context || '').replace(/\s+/g, ' ').trim());
+            return `<div class="coverage-location"><span class="coverage-section-label">${sec}</span>${ctx}</div>`;
+          }).join('');
+
+          return `
+            <details class="coverage-item status-${status}">
+              <summary>
+                <div class="coverage-left">
+                  <div class="coverage-keyword">${this.escapeHtml(i.keyword)}</div>
+                  <div class="coverage-meta">${i.finalCount || 0}x • ${sections.join(', ') || '—'}</div>
+                </div>
+                <span class="coverage-badge">${badge}</span>
+              </summary>
+              <div class="coverage-details">${details || '<div class="coverage-location">No locations captured.</div>'}</div>
+            </details>
+          `;
+        })
+        .join('');
+
+      list.innerHTML = html;
+    };
+
+    render(groups.high, 'coverageHighList', 'coverageHighCount');
+    render(groups.medium, 'coverageMediumList', 'coverageMediumCount');
+    render(groups.low, 'coverageLowList', 'coverageLowCount');
+  }
+
+  async copyCoverageReport() {
+    try {
+      const report = this.generatedDocuments.coverageReport;
+      if (!report) {
+        this.showToast('No coverage report available yet', 'error');
+        return;
+      }
+      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+      this.showToast('Coverage report copied', 'success');
+    } catch (e) {
+      this.showToast('Failed to copy coverage report', 'error');
+    }
   }
 
   setStatus(text, type = 'ready') {
@@ -1569,6 +1701,13 @@ class ATSTailor {
 
       const profileRows = await profileRes.json();
       const p = profileRows?.[0] || {};
+
+      // Apply user location rules for tailoring/output
+      this._defaultLocation = (p.state || [p.city, p.country].filter(Boolean).join(', ') || 'Dublin, IE').trim() || 'Dublin, IE';
+      const effectiveJobLocation = window.ATSLocationTailor?.normalizeJobLocationForApplication
+        ? window.ATSLocationTailor.normalizeJobLocationForApplication(this.currentJob.location || '', this._defaultLocation)
+        : (this.currentJob.location || this._defaultLocation);
+      this.currentJob.location = effectiveJobLocation;
       
       console.log('[ATS Tailor] Step 2 - Profile loaded, generating base CV...');
 
@@ -1623,6 +1762,9 @@ class ATSTailor {
 
       const result = await response.json();
       if (result.error) throw new Error(result.error);
+
+      // Save original CV (before local boosting) for coverage report diffing
+      this._coverageOriginalCV = result.tailoredResume || '';
 
       // Filename format: {FirstName}_{LastName}_CV.pdf and {FirstName}_{LastName}_Cover_Letter.pdf
       const firstName = (p.first_name || '').trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '') || 'Applicant';
@@ -1728,6 +1870,9 @@ class ATSTailor {
       } else if (currentScore >= 100) {
         console.log('[ATS Tailor] Step 3 - Already at 100%');
       }
+
+      // Build keyword coverage report for debugging (injected locations in CV)
+      this.buildKeywordCoverageReport(keywords);
 
       updateProgress(80, 'Step 3/3: Regenerating PDF with boosted CV...');
 

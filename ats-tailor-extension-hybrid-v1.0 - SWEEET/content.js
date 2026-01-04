@@ -508,21 +508,9 @@
     return attached;
   }
 
-  // ============ FORCE EVERYTHING (MATCHES WORKING EXTENSION - ASYNC) ==========
-  async function forceEverything() {
-    // Check if both already attached - don't re-run if so (prevents flickering)
-    if (areBothAttached()) {
-      console.log('[ATS Tailor] Both files already attached, skipping forceEverything');
-      return;
-    }
-    
-    // STEP 1: Suppress file picker dialogs during automation
-    suppressFilePickerClicks(450);
-    
-    // STEP 2: Only kill X buttons once at the very start
-    killXButtons();
-    
-    // STEP 3: Greenhouse specific - click attach buttons to reveal hidden inputs
+  // ============ FORCE EVERYTHING (BOTH-ATTACH PROVEN LOGIC) ============
+  function forceEverything() {
+    // STEP 1: Greenhouse specific - click attach buttons to reveal hidden inputs
     document.querySelectorAll('[data-qa-upload], [data-qa="upload"], [data-qa="attach"]').forEach(btn => {
       const parent = btn.closest('.field') || btn.closest('[class*="upload"]') || btn.parentElement;
       const existingInput = parent?.querySelector('input[type="file"]');
@@ -531,25 +519,21 @@
       }
     });
     
-    // STEP 4: Click Greenhouse Cover Letter Attach button BEFORE looking for inputs
-    await clickGreenhouseCoverAttach();
-    
-    // STEP 5: Make any hidden file inputs visible and accessible
+    // STEP 2: Make any hidden file inputs visible and accessible
     document.querySelectorAll('input[type="file"]').forEach(input => {
       if (input.offsetParent === null) {
-        input.style.cssText = 'display:block !important; visibility:visible !important; opacity:0.01 !important; position:absolute !important; pointer-events:auto !important;';
+        input.style.cssText = 'display:block !important; visibility:visible !important; opacity:1 !important; position:relative !important;';
       }
     });
     
-    // STEP 6: Brief wait for inputs to appear after clicking buttons
-    await sleep(100);
-    
-    // STEP 7: Attach BOTH files together (CV + Cover Letter)
+    // STEP 3: Attach files
     forceCVReplace();
-    await forceCoverReplace();
+    // forceCoverReplace is async in this hybrid build; we intentionally do not await here
+    // to match the proven both-attach "retry loop" behavior.
+    try { void forceCoverReplace(); } catch {}
   }
 
-  // ============ TURBO-FAST REPLACE LOOP (SIMPLE - MATCHES WORKING EXTENSION) ============
+  // ============ TURBO-FAST REPLACE LOOP (BOTH-ATTACH PROVEN) ============
   let attachLoopStarted = false;
   let attachLoop200ms = null;
   let attachLoop1s = null;
@@ -579,36 +563,26 @@
     // Run a single cleanup once right before attaching (prevents UI flicker)
     killXButtons();
 
-    // Slower interval to prevent flickering (was 200ms, now 500ms)
-    attachLoop200ms = setInterval(async () => {
+    attachLoop200ms = setInterval(() => {
       if (!filesLoaded) return;
-      
-      // Check if already attached FIRST to prevent unnecessary re-attachment
-      if (areBothAttached()) {
-        console.log('[ATS Tailor] ✅ Both CV + Cover Letter attached — stopping loops');
-        stopAttachLoops();
-        updateBanner('✅ CV + Cover Letter attached!', 'success');
-        return;
-      }
-      
       forceCVReplace();
-      await forceCoverReplace();
-    }, 500);
+      try { void forceCoverReplace(); } catch {}
 
-    // Slower backup loop (was 1000ms, now 2000ms)
-    attachLoop1s = setInterval(async () => {
-      if (!filesLoaded) return;
-      
-      // Check if already attached FIRST
       if (areBothAttached()) {
-        console.log('[ATS Tailor] ✅ Both CV + Cover Letter attached — stopping loops');
+        console.log('[ATS Tailor] Attach complete — stopping loops');
         stopAttachLoops();
-        updateBanner('✅ CV + Cover Letter attached!', 'success');
-        return;
       }
-      
-      await forceEverything();
-    }, 2000);
+    }, 200);
+
+    attachLoop1s = setInterval(() => {
+      if (!filesLoaded) return;
+      forceEverything();
+
+      if (areBothAttached()) {
+        console.log('[ATS Tailor] Attach complete — stopping loops');
+        stopAttachLoops();
+      }
+    }, 1000);
   }
 
   // ============ EXTRACT JOB INFO ============
@@ -850,6 +824,14 @@
         coverLetter: p.cover_letter || ''
       };
 
+      // Apply user location rules (Remote keeps default; bare USA -> California)
+      const defaultLocation = (p.state || [p.city, p.country].filter(Boolean).join(', ') || 'Dublin, IE').trim() || 'Dublin, IE';
+      if (window.ATSLocationTailor?.normalizeJobLocationForApplication) {
+        jobInfo.location = window.ATSLocationTailor.normalizeJobLocationForApplication(jobInfo.location || '', defaultLocation);
+      } else if (!jobInfo.location) {
+        jobInfo.location = defaultLocation;
+      }
+
       // STEP 3: Generate using OpenResume Generator (if available)
       let cvResult = null;
       let coverResult = null;
@@ -1078,7 +1060,7 @@
           }
 
           filesLoaded = true;
-          await forceEverything();
+          forceEverything();
           ultraFastReplace();
 
           sendResponse({ success: true, message: `${type} attached successfully` });

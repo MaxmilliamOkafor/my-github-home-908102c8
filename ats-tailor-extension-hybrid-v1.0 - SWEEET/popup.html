@@ -207,6 +207,42 @@
               <div class="keyword-chips" id="lowPriorityChips"></div>
             </div>
           </div>
+
+          <!-- NEW: Keyword Coverage Report (shows WHERE keywords appear in CV) -->
+          <div class="coverage-container hidden" id="coverageContainer">
+            <div class="coverage-header">
+              <div class="coverage-header-left">
+                <span class="coverage-icon">🧪</span>
+                <span class="coverage-title">Keyword Coverage (Injected)</span>
+              </div>
+              <button id="copyCoverageBtn" class="btn-icon" title="Copy coverage report">📋</button>
+            </div>
+            <p class="coverage-description">Debug view showing which keywords were injected and where they appear in your CV.</p>
+
+            <div class="coverage-section coverage-high">
+              <div class="coverage-section-header">
+                <span class="section-title">High Priority</span>
+                <span class="section-count" id="coverageHighCount">0/0</span>
+              </div>
+              <div class="coverage-list" id="coverageHighList"></div>
+            </div>
+
+            <div class="coverage-section coverage-medium">
+              <div class="coverage-section-header">
+                <span class="section-title">Medium Priority</span>
+                <span class="section-count" id="coverageMediumCount">0/0</span>
+              </div>
+              <div class="coverage-list" id="coverageMediumList"></div>
+            </div>
+
+            <div class="coverage-section coverage-low">
+              <div class="coverage-section-header">
+                <span class="section-title">Low Priority</span>
+                <span class="section-count" id="coverageLowCount">0/0</span>
+              </div>
+              <div class="coverage-list" id="coverageLowList"></div>
+            </div>
+          </div>
         </div>
 
         <!-- ATS Match Section (legacy compact view) -->
