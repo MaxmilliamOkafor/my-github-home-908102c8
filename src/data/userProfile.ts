@@ -86,9 +86,9 @@ Maxmilliam Okafor`,
       description: `▪ Delivered SolimHealth's end-to-end dementia-screening system by creating an AWS Transcribe/NLTK auto-transcribe model.
 ▪ Integrated FLUX Kontext into a MongoDB clinical backend for lifelike memory recreations.
 ▪ Built a React/TypeScript, Django REST, and TensorFlow.js front end that improved accuracy and efficiency in monthly cognitive assessments.
-▪ Designed REST API and SOAP API integrations for seamless ITSM and ITOM data exchange across healthcare platforms, implementing Agile sprint cycles for continuous delivery.
-▪ Led ServiceNow customization initiatives using Glide API and AngularJS, enabling automated troubleshooting workflows and comprehensive documentation for clinical compliance.`,
-      skills: ["AWS Transcribe", "NLTK", "MongoDB", "React", "TypeScript", "Django", "TensorFlow.js", "NLP", "REST API", "SOAP API", "ServiceNow", "ITSM", "ITOM", "Agile", "Glide API", "AngularJS"]
+▪ Designed and integrated REST and SOAP APIs for secure data exchange across clinical and enterprise services, improving interoperability and reliability.
+▪ Led Agile delivery of workflow automation and platform customization, creating troubleshooting playbooks and clear documentation to meet compliance needs.`,
+      skills: ["AWS Transcribe", "NLTK", "MongoDB", "React", "TypeScript", "Django", "TensorFlow.js", "NLP", "REST API", "SOAP API", "Agile"]
     },
     {
       id: "3",

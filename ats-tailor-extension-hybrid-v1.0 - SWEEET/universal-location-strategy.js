@@ -374,6 +374,36 @@ function normalizeLocationForCV(rawLocation) {
 }
 
 /**
+ * Normalize a job location for tailoring/output using user rules:
+ * - If job says Remote / Remote (USA): keep user's default location
+ * - If job is just USA/US/United States (no city): use California, United States
+ */
+function normalizeJobLocationForApplication(rawLocation, defaultLocation = 'Dublin, IE') {
+  const fallback = (defaultLocation || 'Dublin, IE').trim() || 'Dublin, IE';
+  const raw = (rawLocation || '').trim();
+  if (!raw) return fallback;
+
+  // If it's any kind of remote, keep the user's default location
+  if (/^remote\b/i.test(raw) || /\b(remote|work from home|wfh|virtual)\b/i.test(raw)) {
+    return fallback;
+  }
+
+  // Normalize first (handles duplicates, etc.)
+  const normalized = normalizeLocationForCV(raw);
+
+  // Remote (USA) becomes Remote (United States) -> still treat as remote
+  if (/^remote\b/i.test(normalized)) {
+    return fallback;
+  }
+
+  // If it's just USA with no city, pick California
+  if (/^(usa|us|united states)$/i.test(raw) || /^(usa|us|united states)$/i.test(normalized)) {
+    return 'California, United States';
+  }
+
+  return normalized;
+}
+/**
  * FIXED: Remove duplicate city/region parts and format as "City, Country"
  * "Stockholm, Stockholm, Sweden" → "Stockholm, Sweden"
  * "Rock Hill, SC" → "Rock Hill, SC, United States"
@@ -553,6 +583,7 @@ function getLocationPreview(rawLocation) {
 if (typeof window !== 'undefined') {
   window.ATSLocationTailor = {
     normalizeLocationForCV,
+    normalizeJobLocationForApplication,
     scrapeUniversalLocation,
     getLocationPreview,
     inferCountryFromCity,
@@ -563,6 +594,7 @@ if (typeof window !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     normalizeLocationForCV,
+    normalizeJobLocationForApplication,
     scrapeUniversalLocation,
     getLocationPreview,
     inferCountryFromCity,
