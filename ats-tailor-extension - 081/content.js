@@ -226,14 +226,242 @@
     }
   });
   
-  // ============ WORKDAY AUTOMATION STATE ============
+// ============ WORKDAY AUTOMATION STATE ============
   let workdayFlowState = {
     step: 'idle',
     cvAttached: false,
     educationCleaned: false,
     candidateData: null
   };
+
+  // ============ WORKDAY TOP 1 PIPELINE - Full extraction + tailoring in <200ms ============
+  // Workday is TOP 1 priority: NEVER degrade extraction or tailoring quality for speed
+  // Uses URL-based caching + JD truncation so full keyword set is always injected
   
+  /**
+   * Workday Ultra Snapshot: Captures full JD from listing page BEFORE clicking Apply
+   * Extracts: title, company, location, description (full), job requisition ID
+   */
+  async function workdayUltraSnapshot() {
+    const start = performance.now();
+    console.log('[ATS Workday TOP1] 📸 Capturing JD snapshot...');
+    
+    // Primary selectors for Workday job description
+    const jdSelectors = [
+      '[data-automation-id="jobPostingDescription"]',
+      '[data-automation-id="job-description"]',
+      '.css-cygeeu', // Common Workday JD class
+      '[class*="jobDescription"]',
+      '[class*="JobDescription"]',
+      'article[role="article"]',
+      '.job-description',
+      '#job-description',
+    ];
+    
+    let description = '';
+    for (const sel of jdSelectors) {
+      const el = document.querySelector(sel);
+      if (el?.textContent?.trim().length > 200) {
+        description = el.textContent.trim().substring(0, 10000); // MAX_JD_LENGTH
+        break;
+      }
+    }
+    
+    // Fallback: scan page for large text blocks
+    if (!description) {
+      const allDivs = document.querySelectorAll('div, section, article');
+      for (const div of allDivs) {
+        const text = div.textContent?.trim() || '';
+        if (text.length > 500 && text.length < 15000 && 
+            (text.includes('responsibilities') || text.includes('requirements') || 
+             text.includes('qualifications') || text.includes('experience'))) {
+          description = text.substring(0, 10000);
+          break;
+        }
+      }
+    }
+    
+    // Extract title
+    const titleSelectors = [
+      '[data-automation-id="jobPostingHeader"] h2',
+      '[data-automation-id="job-title"]',
+      'h1[class*="title"]',
+      'h2[class*="title"]',
+      '.job-title',
+      'header h1',
+      'header h2',
+    ];
+    let title = '';
+    for (const sel of titleSelectors) {
+      const el = document.querySelector(sel);
+      if (el?.textContent?.trim()) {
+        title = el.textContent.trim();
+        break;
+      }
+    }
+    if (!title) {
+      title = document.title?.split('|')?.[0]?.split('-')?.[0]?.trim() || 'Role';
+    }
+    
+    // Extract company
+    const companySelectors = [
+      '[data-automation-id="company"]',
+      '[data-automation-id="job-company"]',
+      '.company-name',
+      '[class*="company"]',
+    ];
+    let company = '';
+    for (const sel of companySelectors) {
+      const el = document.querySelector(sel);
+      if (el?.textContent?.trim()) {
+        company = el.textContent.trim();
+        break;
+      }
+    }
+    if (!company) {
+      // Try URL subdomain
+      const subdomain = window.location.hostname.split('.')[0];
+      if (subdomain && subdomain.length > 2 && !['www', 'apply', 'jobs', 'careers', 'wd1', 'wd3', 'wd5'].includes(subdomain.toLowerCase())) {
+        company = subdomain.charAt(0).toUpperCase() + subdomain.slice(1);
+      }
+    }
+    
+    // Extract location
+    const locationSelectors = [
+      '[data-automation-id="location"]',
+      '[data-automation-id="locations"]',
+      '[data-automation-id="jobPostingLocation"]',
+      '.job-location',
+      '[class*="location"]',
+    ];
+    let rawLocation = '';
+    for (const sel of locationSelectors) {
+      const el = document.querySelector(sel);
+      if (el?.textContent?.trim()) {
+        rawLocation = el.textContent.trim();
+        break;
+      }
+    }
+    const location = stripRemoteFromLocation(rawLocation) || rawLocation;
+    
+    // Extract job requisition ID
+    let requisitionId = '';
+    const reqMatch = document.body.textContent?.match(/R-\d{5,}/);
+    if (reqMatch) {
+      requisitionId = reqMatch[0];
+    }
+    
+    const elapsed = Math.round(performance.now() - start);
+    console.log(`[ATS Workday TOP1] 📸 Snapshot captured in ${elapsed}ms:`, title);
+    
+    return {
+      title,
+      company,
+      location,
+      description,
+      requisitionId,
+      url: window.location.href,
+      platform: 'workday',
+      snapshotTime: Date.now(),
+    };
+  }
+  
+  /**
+   * Workday Instant Keywords: Extract keywords from JD with URL-based caching
+   * Returns in ~1ms for cached jobs, ~20ms for new jobs
+   */
+  async function workdayInstantKeywords(jobInfo) {
+    const start = performance.now();
+    const jobUrl = jobInfo.url || window.location.href;
+    
+    // Check TurboPipeline first (has built-in URL caching)
+    if (typeof TurboPipeline !== 'undefined' && TurboPipeline.turboExtractKeywords) {
+      const keywords = await TurboPipeline.turboExtractKeywords(jobInfo.description || '', {
+        jobUrl,
+        maxKeywords: 35, // TOP 1% gets 35 keywords
+      });
+      console.log(`[ATS Workday TOP1] ⚡ Keywords extracted in ${Math.round(performance.now() - start)}ms: ${keywords.total} keywords`);
+      return keywords;
+    }
+    
+    // Fallback to basic extraction
+    const basicKeywords = extractBasicKeywords(jobInfo.description);
+    return {
+      all: basicKeywords,
+      highPriority: basicKeywords.slice(0, 12),
+      mediumPriority: basicKeywords.slice(12, 22),
+      lowPriority: basicKeywords.slice(22),
+      workExperience: basicKeywords.slice(0, 20),
+      total: basicKeywords.length,
+    };
+  }
+  
+  /**
+   * Workday TOP 1 Pipeline Executor
+   * Runs full extraction + tailoring + PDF generation + attachment
+   * Target: <200ms total, 100% keyword coverage
+   */
+  async function executeWorkdayTop1Pipeline(snapshot, candidateData, baseCV) {
+    const start = performance.now();
+    console.log('[ATS Workday TOP1] 🚀 Executing full pipeline...');
+    
+    createStatusBanner();
+    updateBanner('🚀 Workday TOP1: Full pipeline running...', 'working');
+    
+    // Check if TurboPipeline available
+    if (typeof TurboPipeline !== 'undefined' && TurboPipeline.executeTurboPipeline) {
+      try {
+        const result = await TurboPipeline.executeTurboPipeline(
+          snapshot,
+          candidateData,
+          baseCV,
+          {
+            maxKeywords: 35,
+            targetScore: 95,
+            pdf: true,
+          }
+        );
+        
+        const elapsed = Math.round(performance.now() - start);
+        console.log(`[ATS Workday TOP1] ✅ Pipeline complete in ${elapsed}ms, score: ${result.matchScore}%`);
+        
+        // Store generated files
+        if (result.success && result.cvPDF) {
+          cvFile = createPDFFile(result.cvPDF.base64 || result.cvPDF, result.cvPDF.filename || 'Resume.pdf');
+          if (result.coverPDF) {
+            coverFile = createPDFFile(result.coverPDF.base64 || result.coverPDF, result.coverPDF.filename || 'Cover_Letter.pdf');
+          }
+          filesLoaded = true;
+          
+          // Cache in storage
+          chrome.storage.local.set({
+            [`tailored_${snapshot.url}`]: {
+              keywords: result.keywords,
+              matchScore: result.matchScore,
+              cvBase64: result.cvPDF.base64 || result.cvPDF,
+              cvFileName: result.cvPDF.filename || 'Resume.pdf',
+              coverBase64: result.coverPDF?.base64 || result.coverPDF,
+              coverFileName: result.coverPDF?.filename || 'Cover_Letter.pdf',
+              timestamp: Date.now(),
+            },
+          });
+          
+          updateBanner(`🚀 ATS TAILOR ✅ Done! Match: ${result.matchScore}% in ${elapsed}ms`, 'success');
+        }
+        
+        return result;
+      } catch (err) {
+        console.error('[ATS Workday TOP1] Pipeline error:', err);
+        updateBanner('⚠️ Pipeline error, using fallback...', 'error');
+      }
+    }
+    
+    // Fallback: trigger standard tailor
+    updateBanner('🔄 Running standard tailor...', 'working');
+    await autoTailorDocuments();
+    return null;
+  }
+
   // ============ WORKDAY FULL AUTOMATION FLOW ============
   async function runWorkdayAutomationFlow(candidateData) {
     console.log('[ATS Tailor Workday] Starting full automation flow');
@@ -243,34 +471,81 @@
     workdayFlowState.candidateData = candidateData;
     const url = window.location.href;
     
-    // Step 1: Job Page - Click Apply button
+    // ============ WORKDAY TOP 1: JOB LISTING PAGE ============
+    // Snapshot JD BEFORE clicking Apply, cache for apply flow
     if (isWorkdayJobPage()) {
-      updateBanner('🚀 Workday: Extracting JD & clicking Apply...', 'working');
+      updateBanner('🚀 Workday TOP1: Capturing JD snapshot...', 'working');
       
-      // Fast JD extraction (<500ms)
       const start = performance.now();
-      const jobInfo = extractJobInfo();
-      console.log(`[ATS Tailor Workday] JD extracted in ${performance.now() - start}ms:`, jobInfo.title);
       
-      // Cache keywords for later use
-      if (typeof TurboPipeline !== 'undefined' && TurboPipeline.turboExtractKeywords) {
-        const keywords = await TurboPipeline.turboExtractKeywords(jobInfo.description || '', { maxKeywords: 15 });
-        chrome.storage.local.set({ workday_cached_keywords: keywords, workday_cached_jobInfo: jobInfo });
-      }
+      // ULTRA SNAPSHOT: Capture full JD from listing page
+      const jobInfo = await workdayUltraSnapshot();
+      console.log(`[ATS Workday TOP1] JD snapshot in ${performance.now() - start}ms:`, jobInfo.title);
       
-      // Trigger INSTANT_TAILOR_ATTACH silently for CV generation prep
+      // INSTANT KEYWORDS: Extract ALL keywords from JD (cached: ~1ms, new: ~20ms)
+      const keywords = await workdayInstantKeywords(jobInfo);
+      
+      // PERSIST: Store snapshot in both window and localStorage for navigation
+      const workdaySnapshot = {
+        ...jobInfo,
+        keywords,
+        snapshotUrl: window.location.href,
+      };
+      window.workdayJobSnapshot = workdaySnapshot;
+      localStorage.setItem('workdayJobSnapshot', JSON.stringify(workdaySnapshot));
+      sessionStorage.setItem('workdayJobSnapshot', JSON.stringify(workdaySnapshot));
+      
+      // Also store in chrome.storage for persistence
+      chrome.storage.local.set({
+        workday_cached_keywords: keywords,
+        workday_cached_jobInfo: jobInfo,
+        workday_snapshot_url: window.location.href,
+      });
+      
+      console.log(`[ATS Workday TOP1] ✅ Snapshot cached: ${keywords.total} keywords from "${jobInfo.title}"`);
+      updateBanner(`📸 JD Captured: ${keywords.total} keywords | Clicking Apply...`, 'working');
+      
+      // Trigger background CV generation while user navigates
       chrome.runtime.sendMessage({
         action: 'TRIGGER_EXTRACT_APPLY',
         jobInfo: jobInfo,
-        showButtonAnimation: false
+        showButtonAnimation: false,
       }).catch(() => {});
       
-      // Click Apply button
-      const applyBtn = document.querySelector('a[data-automation-id="jobPostingApplyButton"], button[data-automation-id="jobPostingApplyButton"], a[href*="/apply"], button:contains("Apply")');
-      if (applyBtn) {
-        applyBtn.click();
-        workdayFlowState.step = 'apply_clicked';
-      }
+      // Click Apply button (multiple selector strategies)
+      setTimeout(() => {
+        const applySelectors = [
+          'a[data-automation-id="jobPostingApplyButton"]',
+          'button[data-automation-id="jobPostingApplyButton"]',
+          'a[href*="/apply"]',
+          'button[aria-label*="Apply"]',
+          'a[aria-label*="Apply"]',
+        ];
+        
+        for (const sel of applySelectors) {
+          const applyBtn = document.querySelector(sel);
+          if (applyBtn) {
+            console.log('[ATS Workday TOP1] 🖱️ Clicking Apply button:', sel);
+            applyBtn.click();
+            workdayFlowState.step = 'apply_clicked';
+            return;
+          }
+        }
+        
+        // Fallback: find button with "Apply" text
+        const allButtons = document.querySelectorAll('a, button');
+        for (const btn of allButtons) {
+          if (btn.textContent?.trim().toLowerCase() === 'apply') {
+            console.log('[ATS Workday TOP1] 🖱️ Clicking Apply button (text match)');
+            btn.click();
+            workdayFlowState.step = 'apply_clicked';
+            return;
+          }
+        }
+        
+        console.log('[ATS Workday TOP1] ⚠️ Apply button not found');
+      }, 300); // Small delay to ensure snapshot is saved
+      
       return;
     }
     
@@ -298,14 +573,95 @@
       return;
     }
     
-    // Step 3: My Experience page - Attach CV ONCE
+    // ============ WORKDAY TOP 1: MY EXPERIENCE PAGE ============
+    // Use cached JD snapshot to run FULL TurboPipeline, then attach CV+Cover
     if (isWorkdayMyExperiencePage()) {
       if (!workdayFlowState.cvAttached) {
-        updateBanner('🚀 Workday: Attaching tailored CV...', 'working');
+        updateBanner('🚀 Workday TOP1: Running full pipeline...', 'working');
         
-        // Load cached CV and attach ONCE
-        loadFilesAndStart();
-        workdayFlowState.cvAttached = true;
+        // RECOVER SNAPSHOT: From window, localStorage, sessionStorage, or chrome.storage
+        let snapshot = window.workdayJobSnapshot;
+        if (!snapshot) {
+          try {
+            snapshot = JSON.parse(localStorage.getItem('workdayJobSnapshot') || sessionStorage.getItem('workdayJobSnapshot') || '{}');
+          } catch (e) {}
+        }
+        
+        // If no snapshot, try chrome.storage
+        if (!snapshot?.keywords?.all?.length) {
+          const stored = await new Promise(resolve => {
+            chrome.storage.local.get(['workday_cached_keywords', 'workday_cached_jobInfo'], resolve);
+          });
+          if (stored.workday_cached_keywords && stored.workday_cached_jobInfo) {
+            snapshot = {
+              ...stored.workday_cached_jobInfo,
+              keywords: stored.workday_cached_keywords,
+            };
+          }
+        }
+        
+        // If we have a valid snapshot with keywords, run full TurboPipeline
+        if (snapshot?.keywords?.all?.length) {
+          console.log(`[ATS Workday TOP1] 📦 Recovered snapshot: ${snapshot.keywords.total} keywords from "${snapshot.title}"`);
+          
+          // Load user profile and base CV
+          const data = await new Promise(resolve => {
+            chrome.storage.local.get(['ats_session', 'ats_profile', 'ats_baseCV'], resolve);
+          });
+          
+          if (data.ats_session && data.ats_baseCV) {
+            const profile = data.ats_profile || {};
+            const baseCV = data.ats_baseCV;
+            
+            // Prepare candidateData
+            const candidateData = {
+              firstName: profile.firstName || profile.first_name || '',
+              lastName: profile.lastName || profile.last_name || '',
+              email: profile.email || data.ats_session?.user?.email || '',
+              phone: profile.phone || '',
+              city: stripRemoteFromLocation(profile.city) || defaultLocation,
+              linkedin: profile.linkedin || '',
+              github: profile.github || '',
+              portfolio: profile.portfolio || '',
+            };
+            
+            // EXECUTE FULL PIPELINE: Extract → Tailor → PDF → Attach
+            const result = await executeWorkdayTop1Pipeline(snapshot, candidateData, baseCV);
+            
+            if (result?.success && filesLoaded) {
+              // ATTACH BOTH: CV + Cover Letter
+              forceEverything();
+              ultraFastReplace();
+              
+              console.log('[ATS Workday TOP1] ✅ Files attached successfully');
+              workdayFlowState.cvAttached = true;
+              
+              // Disable upload field after attach to prevent re-attachment loop
+              setTimeout(() => {
+                const uploadFields = document.querySelectorAll('input[type="file"]');
+                uploadFields.forEach(field => {
+                  if (isCVField(field) && field.files?.length > 0) {
+                    field.disabled = true;
+                    field.setAttribute('data-ats-tailor-disabled', '1');
+                  }
+                });
+              }, 500);
+            } else {
+              // Fallback: load any cached files
+              loadFilesAndStart();
+              workdayFlowState.cvAttached = true;
+            }
+          } else {
+            // No session/baseCV, fallback to cached files
+            loadFilesAndStart();
+            workdayFlowState.cvAttached = true;
+          }
+        } else {
+          // No snapshot available, use standard flow
+          console.log('[ATS Workday TOP1] ⚠️ No snapshot found, using standard flow');
+          loadFilesAndStart();
+          workdayFlowState.cvAttached = true;
+        }
         
         // Disable upload field after attach to prevent re-attachment loop
         setTimeout(() => {
@@ -1454,6 +1810,69 @@
     createStatusBanner();
     updateBanner('ATS detected! Preparing...', 'working');
     
+    // ============ WORKDAY TOP 1 PRIORITY PATH ============
+    // For Workday, run the special TOP 1 pipeline that:
+    // 1. On listing page: Snapshot JD before clicking Apply
+    // 2. On apply page: Use cached JD for full TurboPipeline
+    if (isWorkdayHost()) {
+      console.log('[ATS Workday TOP1] 🚀 Workday detected - TOP 1 priority mode active!');
+      updateBanner('🚀 Workday TOP1: Initializing...', 'working');
+      
+      setTimeout(async () => {
+        const url = window.location.href;
+        
+        // LISTING PAGE: Snapshot JD before Apply
+        if (!url.includes('/apply') && isWorkdayJobPage()) {
+          console.log('[ATS Workday TOP1] 📄 Job listing page detected');
+          updateBanner('🚀 Workday TOP1: Capturing JD...', 'working');
+          
+          // Capture ultra snapshot
+          const jobInfo = await workdayUltraSnapshot();
+          const keywords = await workdayInstantKeywords(jobInfo);
+          
+          // Store snapshot for apply page
+          const workdaySnapshot = {
+            ...jobInfo,
+            keywords,
+            snapshotUrl: window.location.href,
+          };
+          window.workdayJobSnapshot = workdaySnapshot;
+          localStorage.setItem('workdayJobSnapshot', JSON.stringify(workdaySnapshot));
+          sessionStorage.setItem('workdayJobSnapshot', JSON.stringify(workdaySnapshot));
+          chrome.storage.local.set({
+            workday_cached_keywords: keywords,
+            workday_cached_jobInfo: jobInfo,
+            workday_snapshot_url: window.location.href,
+          });
+          
+          console.log(`[ATS Workday TOP1] ✅ JD cached: ${keywords.total} keywords from "${jobInfo.title}"`);
+          updateBanner(`📸 JD Captured: ${keywords.total} keywords | Ready to Apply`, 'success');
+          
+          // Trigger background CV generation prep
+          chrome.runtime.sendMessage({
+            action: 'TRIGGER_EXTRACT_APPLY',
+            jobInfo: jobInfo,
+            showButtonAnimation: false,
+          }).catch(() => {});
+          
+          return;
+        }
+        
+        // APPLY PAGE: Use cached JD to run full TurboPipeline
+        if (url.includes('/apply') || isWorkdayMyExperiencePage() || isWorkdayCreateAccountPage()) {
+          console.log('[ATS Workday TOP1] 📝 Apply flow page detected');
+          runWorkdayAutomationFlow();
+          return;
+        }
+        
+        // Unknown Workday page - trigger popup
+        triggerPopupExtractApply();
+      }, 200); // Small delay for page to stabilize
+      
+      return;
+    }
+    
+    // ============ NON-WORKDAY ATS PATH ============
     // Trigger popup Extract & Apply immediately on ATS detection
     setTimeout(() => {
       console.log('[ATS Tailor] ATS platform detected - triggering popup...');
