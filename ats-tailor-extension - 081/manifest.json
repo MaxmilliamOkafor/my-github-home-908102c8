@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ATS Tailor v1.6.0 - WORKDAY TOP 1 PIPELINE",
-  "version": "1.6.0",
-  "description": "WORKDAY TOP 1 v1.6.0: Snapshots JD on listing page before Apply click, caches for full TurboPipeline on apply flow. Full keyword extraction (35 keywords), full tailoring, <200ms total. BOTH ATTACH (CV + Cover Letter). HARD RULE: Never 'Remote' in CV location. Remote/USA → California. ATS-perfect PDF: Arial 10.5pt, 0.75\" margins.",
+  "name": "ATS Tailor v1.6.1 - WORKDAY TOP 1 + JD Snapshot",
+  "version": "1.6.1",
+  "description": "WORKDAY TOP 1 v1.6.1: JD Snapshot panel + Force Apply button. Snapshots JD on listing page before Apply, caches for full TurboPipeline on apply flow. 35 keywords, <200ms total. BOTH ATTACH. Fixed duplicate banner text. Location: Remote/USA → California.",
   "permissions": [
     "storage",
     "activeTab",

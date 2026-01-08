@@ -340,6 +340,54 @@
         </div>
       </div>
 
+      <!-- WORKDAY TOP 1 - JD Snapshot Preview Panel -->
+      <div class="workday-snapshot-panel hidden" id="workdaySnapshotPanel">
+        <div class="snapshot-header">
+          <div class="snapshot-header-left">
+            <span class="snapshot-icon">📸</span>
+            <span class="snapshot-title">Workday JD Snapshot</span>
+          </div>
+          <span class="snapshot-badge" id="snapshotStatus">Not captured</span>
+        </div>
+        
+        <div class="snapshot-info" id="snapshotInfo">
+          <div class="snapshot-row">
+            <span class="snapshot-label">Job Title:</span>
+            <span class="snapshot-value" id="snapshotJobTitle">-</span>
+          </div>
+          <div class="snapshot-row">
+            <span class="snapshot-label">Company:</span>
+            <span class="snapshot-value" id="snapshotCompany">-</span>
+          </div>
+          <div class="snapshot-row">
+            <span class="snapshot-label">Location:</span>
+            <span class="snapshot-value" id="snapshotLocation">-</span>
+          </div>
+          <div class="snapshot-row">
+            <span class="snapshot-label">Keywords:</span>
+            <span class="snapshot-value snapshot-keywords" id="snapshotKeywords">0 extracted</span>
+          </div>
+        </div>
+        
+        <div class="snapshot-jd-preview">
+          <details>
+            <summary>📄 View JD Preview</summary>
+            <div class="jd-preview-content" id="snapshotJDPreview">No JD captured yet. Navigate to a Workday job listing to capture.</div>
+          </details>
+        </div>
+        
+        <div class="snapshot-actions">
+          <button id="captureSnapshotBtn" class="btn btn-secondary btn-snapshot">
+            <span class="btn-icon">📸</span>
+            <span class="btn-text">Capture JD Now</span>
+          </button>
+          <button id="forceWorkdayApplyBtn" class="btn btn-accent btn-force-apply">
+            <span class="btn-icon">🚀</span>
+            <span class="btn-text">Force Apply</span>
+          </button>
+        </div>
+      </div>
+
       <!-- ATS TAILOR - Workday Profile Setup Section -->
       <div class="workday-section ats-tailor-section">
         <div class="section-header-badge">ATS TAILOR</div>

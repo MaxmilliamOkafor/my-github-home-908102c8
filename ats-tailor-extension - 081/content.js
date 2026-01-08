@@ -84,6 +84,76 @@
       return true;
     }
     
+    // ============ WORKDAY SNAPSHOT CAPTURE (for popup panel) ============
+    if (message.action === 'CAPTURE_WORKDAY_SNAPSHOT') {
+      console.log('[ATS Tailor] Capturing Workday JD snapshot...');
+      (async () => {
+        try {
+          const jobInfo = await workdayUltraSnapshot();
+          const keywords = await workdayInstantKeywords(jobInfo);
+          
+          const snapshot = {
+            ...jobInfo,
+            keywords,
+            snapshotUrl: window.location.href,
+          };
+          
+          // Store in multiple locations for persistence
+          window.workdayJobSnapshot = snapshot;
+          localStorage.setItem('workdayJobSnapshot', JSON.stringify(snapshot));
+          sessionStorage.setItem('workdayJobSnapshot', JSON.stringify(snapshot));
+          
+          console.log(`[ATS Tailor] ✅ Snapshot captured: ${keywords.total} keywords`);
+          sendResponse({ success: true, snapshot });
+        } catch (e) {
+          console.error('[ATS Tailor] Snapshot capture error:', e);
+          sendResponse({ success: false, error: e.message });
+        }
+      })();
+      return true; // Keep channel open for async response
+    }
+    
+    // ============ FORCE WORKDAY APPLY CLICK ============
+    if (message.action === 'FORCE_WORKDAY_APPLY') {
+      console.log('[ATS Tailor] Force clicking Workday Apply button...');
+      
+      const applySelectors = [
+        'a[data-automation-id="jobPostingApplyButton"]',
+        'button[data-automation-id="jobPostingApplyButton"]',
+        'a[href*="/apply"]',
+        'button[aria-label*="Apply"]',
+        'a[aria-label*="Apply"]',
+      ];
+      
+      let clicked = false;
+      for (const sel of applySelectors) {
+        const applyBtn = document.querySelector(sel);
+        if (applyBtn) {
+          console.log('[ATS Tailor] Found Apply button:', sel);
+          applyBtn.click();
+          clicked = true;
+          break;
+        }
+      }
+      
+      // Fallback: find button with "Apply" text
+      if (!clicked) {
+        const allButtons = document.querySelectorAll('a, button');
+        for (const btn of allButtons) {
+          const text = btn.textContent?.trim().toLowerCase();
+          if (text === 'apply' || text === 'apply now') {
+            console.log('[ATS Tailor] Found Apply button (text match)');
+            btn.click();
+            clicked = true;
+            break;
+          }
+        }
+      }
+      
+      sendResponse({ success: clicked, error: clicked ? null : 'Apply button not found' });
+      return true;
+    }
+    
     // ============ FRESH JD TAILOR + ATTACH (Per-Role, No Fallback) ============
     if (message.action === 'INSTANT_TAILOR_ATTACH') {
       const start = performance.now();
@@ -91,7 +161,7 @@
       
       console.log('[ATS Tailor] ⚡ FRESH JD TAILOR - extracting keywords for THIS role');
       createStatusBanner();
-      updateBanner('🚀 Extracting JD keywords...', 'working');
+      updateBanner('Extracting JD keywords...', 'working');
       
       chrome.storage.local.get(['ats_session', 'ats_profile', 'ats_baseCV'], async (data) => {
         try {
@@ -178,7 +248,7 @@
             // Unified success banner (all ATS)
             const displayScore = 100;
 
-            updateBanner('🚀 ATS TAILOR ✅ Done! Match: 100% - Files attached!', 'success');
+            updateBanner('✅ Done! Match: 100% - Files attached!', 'success');
             sendResponse({ status: 'attached', timing: elapsed, matchScore: displayScore, keywords: keywords.length });
             return;
           }
@@ -446,7 +516,7 @@
             },
           });
           
-          updateBanner(`🚀 ATS TAILOR ✅ Done! Match: ${result.matchScore}% in ${elapsed}ms`, 'success');
+          updateBanner(`✅ Done! Match: ${result.matchScore}% in ${elapsed}ms`, 'success');
         }
         
         return result;
@@ -723,7 +793,7 @@
       }
       
       // Success! Show 100% match banner
-      updateBanner('🚀 ATS TAILOR ✅ Done! Match: 100% - Files attached!', 'success');
+      updateBanner('✅ Done! Match: 100% - Files attached!', 'success');
       showWorkdaySuccessRibbon();
       
       // Signal job completion for bulk queue
@@ -857,8 +927,7 @@
           50% { box-shadow: 0 4px 30px rgba(0, 255, 136, 0.8); }
         }
       </style>
-      <span>🚀 ATS TAILOR</span>
-      <span style="margin-left: 10px;">✅ Done! Match: 100% - Files attached!</span>
+      <span>✅ Done! Match: 100% - Files attached!</span>
     `;
     
     document.body.appendChild(ribbon);
@@ -877,7 +946,7 @@
 
     // Unified success banner (all ATS)
     setTimeout(() => {
-      updateBanner('🚀 ATS TAILOR ✅ Done! Match: 100% - Files attached!', 'success');
+      updateBanner('✅ Done! Match: 100% - Files attached!', 'success');
     }, 5000);
   }
   
@@ -1613,7 +1682,7 @@
       // Now load files and start attaching
       loadFilesAndStart();
       
-      updateBanner('🚀 ATS TAILOR ✅ Done! Match: 100% - Files attached!', 'success');
+      updateBanner('✅ Done! Match: 100% - Files attached!', 'success');
       hideBanner();
 
     } catch (error) {
