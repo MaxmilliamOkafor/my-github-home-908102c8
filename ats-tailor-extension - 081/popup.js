@@ -223,6 +223,10 @@ class ATSTailor {
     });
     document.getElementById('saveWorkdayCreds')?.addEventListener('click', () => this.saveWorkdayCredentials());
     
+    // Workday Snapshot Panel buttons
+    document.getElementById('captureSnapshotBtn')?.addEventListener('click', () => this.captureWorkdaySnapshot());
+    document.getElementById('forceWorkdayApplyBtn')?.addEventListener('click', () => this.forceWorkdayApply());
+    
     // Default location setting for Remote jobs
     document.getElementById('saveLocationBtn')?.addEventListener('click', () => this.saveDefaultLocation());
     document.getElementById('defaultLocationInput')?.addEventListener('keypress', (e) => {
@@ -232,6 +236,9 @@ class ATSTailor {
     // Load Workday settings and location settings
     this.loadWorkdaySettings();
     this.loadLocationSettings();
+    
+    // Check and show Workday snapshot panel if on Workday
+    this.checkWorkdayAndShowSnapshot();
 
     // Preview tabs
     document.getElementById('previewCvTab')?.addEventListener('click', () => this.switchPreviewTab('cv'));
@@ -654,13 +661,16 @@ class ATSTailor {
     }
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.url?.includes('workday')) {
+    if (!tab?.url?.includes('workday') && !tab?.url?.includes('myworkdayjobs')) {
       this.showToast('Navigate to a Workday job page first', 'error');
       return;
     }
 
-    this.showToast('Starting Workday automation...', 'success');
-    this.setStatus('Running Workday Flow...', 'working');
+    this.showToast('Starting Workday TOP1 automation...', 'success');
+    this.setStatus('Running Workday TOP1 Flow...', 'working');
+
+    // First capture the snapshot if not already captured
+    await this.captureWorkdaySnapshot();
 
     let candidateData = null;
     try {
@@ -679,14 +689,153 @@ class ATSTailor {
       console.log('Could not fetch profile for Workday flow');
     }
 
-    chrome.runtime.sendMessage({
-      action: 'TRIGGER_WORKDAY_FLOW',
-      candidateData: candidateData
-    });
+    // Send to content script to start the flow
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        action: 'START_WORKDAY_FLOW',
+        candidateData: candidateData
+      });
+    } catch (e) {
+      // Fallback to background
+      chrome.runtime.sendMessage({
+        action: 'TRIGGER_WORKDAY_FLOW',
+        candidateData: candidateData
+      });
+    }
 
     setTimeout(() => {
       window.close();
     }, 1000);
+  }
+  
+  /**
+   * Check if on Workday and show/hide snapshot panel accordingly
+   */
+  async checkWorkdayAndShowSnapshot() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const isWorkday = tab?.url?.includes('workday') || tab?.url?.includes('myworkdayjobs');
+      
+      const snapshotPanel = document.getElementById('workdaySnapshotPanel');
+      if (snapshotPanel) {
+        snapshotPanel.classList.toggle('hidden', !isWorkday);
+      }
+      
+      if (isWorkday) {
+        // Load any existing snapshot
+        await this.loadWorkdaySnapshot();
+      }
+    } catch (e) {
+      console.log('[ATS Tailor] Error checking Workday status:', e);
+    }
+  }
+  
+  /**
+   * Load existing Workday snapshot from storage
+   */
+  async loadWorkdaySnapshot() {
+    try {
+      const result = await new Promise(resolve => {
+        chrome.storage.local.get(['workday_cached_keywords', 'workday_cached_jobInfo'], resolve);
+      });
+      
+      if (result.workday_cached_jobInfo && result.workday_cached_keywords) {
+        this.updateSnapshotUI(result.workday_cached_jobInfo, result.workday_cached_keywords);
+      }
+    } catch (e) {
+      console.log('[ATS Tailor] Error loading snapshot:', e);
+    }
+  }
+  
+  /**
+   * Capture Workday JD snapshot from current page
+   */
+  async captureWorkdaySnapshot() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) {
+        this.showToast('No active tab found', 'error');
+        return;
+      }
+      
+      this.showToast('Capturing JD snapshot...', 'success');
+      
+      // Send message to content script to capture snapshot
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: 'CAPTURE_WORKDAY_SNAPSHOT'
+      });
+      
+      if (response?.success && response.snapshot) {
+        // Store snapshot
+        chrome.storage.local.set({
+          workday_cached_keywords: response.snapshot.keywords,
+          workday_cached_jobInfo: response.snapshot,
+        });
+        
+        this.updateSnapshotUI(response.snapshot, response.snapshot.keywords);
+        this.showToast(`Captured ${response.snapshot.keywords?.total || 0} keywords!`, 'success');
+      } else {
+        this.showToast('Could not capture JD - try refreshing page', 'error');
+      }
+    } catch (e) {
+      console.error('[ATS Tailor] Snapshot capture error:', e);
+      this.showToast('Capture failed - ensure you are on a Workday job listing', 'error');
+    }
+  }
+  
+  /**
+   * Update the snapshot panel UI with captured data
+   */
+  updateSnapshotUI(jobInfo, keywords) {
+    const badge = document.getElementById('snapshotStatus');
+    const titleEl = document.getElementById('snapshotJobTitle');
+    const companyEl = document.getElementById('snapshotCompany');
+    const locationEl = document.getElementById('snapshotLocation');
+    const keywordsEl = document.getElementById('snapshotKeywords');
+    const jdPreviewEl = document.getElementById('snapshotJDPreview');
+    
+    if (badge) {
+      badge.textContent = 'Captured ✓';
+      badge.classList.add('captured');
+    }
+    if (titleEl) titleEl.textContent = jobInfo.title || '-';
+    if (companyEl) companyEl.textContent = jobInfo.company || '-';
+    if (locationEl) locationEl.textContent = jobInfo.location || '-';
+    if (keywordsEl) keywordsEl.textContent = `${keywords?.total || 0} extracted`;
+    if (jdPreviewEl) jdPreviewEl.textContent = (jobInfo.description || 'No description').substring(0, 500) + '...';
+  }
+  
+  /**
+   * Force click the Apply button after snapshot capture
+   */
+  async forceWorkdayApply() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) {
+        this.showToast('No active tab found', 'error');
+        return;
+      }
+      
+      // First capture snapshot if not done
+      await this.captureWorkdaySnapshot();
+      
+      this.showToast('Clicking Apply button...', 'success');
+      
+      // Send message to content script to click Apply
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: 'FORCE_WORKDAY_APPLY'
+      });
+      
+      if (response?.success) {
+        this.showToast('Apply clicked! Navigating...', 'success');
+        setTimeout(() => window.close(), 500);
+      } else {
+        this.showToast(response?.error || 'Could not find Apply button', 'error');
+      }
+    } catch (e) {
+      console.error('[ATS Tailor] Force Apply error:', e);
+      this.showToast('Error clicking Apply - check console', 'error');
+    }
   }
 
   copyCurrentContent() {
