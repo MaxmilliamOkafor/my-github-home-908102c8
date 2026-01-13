@@ -614,43 +614,80 @@ const Jobs = () => {
               setIsSearching(true);
               setActiveSearchQuery(keywords);
               try {
-                const { data, error } = await supabase.functions.invoke('search-jobs-google', {
-                  body: {
-                    keywords,
-                    location: locations || '',
-                    timeFilter: filters?.timeFilter || 'all',
-                    jobType: filters?.jobType || 'all',
-                    workType: filters?.workType || 'all',
-                    experienceLevel: filters?.experienceLevel || 'all',
-                  },
-                });
-                
-                if (error) throw error;
-                
-                if (data?.success) {
-                  await refetch();
-                  setLastSearchResultCount(data.totalFound || 0);
-                  const keywordPreview = keywords.split(',').slice(0, 3).map((k: string) => k.trim()).join(', ');
-                  
-                  let platformInfo = '';
-                  if (data.platforms && Object.keys(data.platforms).length > 0) {
-                    const topPlatforms = Object.entries(data.platforms)
-                      .sort((a, b) => (b[1] as number) - (a[1] as number))
-                      .slice(0, 4)
-                      .map(([name, count]) => `${name}: ${count}`)
-                      .join(', ');
-                    platformInfo = topPlatforms;
-                  }
-                  
-                  toast.success(`Found ${data.totalFound || 0} jobs across ${Object.keys(data.platforms || {}).length} platforms`, {
-                    description: platformInfo || `Searched: ${keywordPreview}`,
-                    duration: 5000,
+                // Primary path: wide ATS coverage (requires FIRECRAWL_API_KEY configured)
+                try {
+                  const { data, error } = await supabase.functions.invoke('search-jobs-google', {
+                    body: {
+                      keywords,
+                      location: locations || '',
+                      timeFilter: filters?.timeFilter || 'all',
+                      jobType: filters?.jobType || 'all',
+                      workType: filters?.workType || 'all',
+                      experienceLevel: filters?.experienceLevel || 'all',
+                    },
                   });
-                } else {
+
+                  if (error) throw error;
+
+                  if (data?.success) {
+                    await refetch();
+                    setLastSearchResultCount(data.totalFound || 0);
+                    const keywordPreview = keywords
+                      .split(',')
+                      .slice(0, 3)
+                      .map((k: string) => k.trim())
+                      .join(', ');
+
+                    let platformInfo = '';
+                    if (data.platforms && Object.keys(data.platforms).length > 0) {
+                      const topPlatforms = Object.entries(data.platforms)
+                        .sort((a, b) => (b[1] as number) - (a[1] as number))
+                        .slice(0, 4)
+                        .map(([name, count]) => `${name}: ${count}`)
+                        .join(', ');
+                      platformInfo = topPlatforms;
+                    }
+
+                    toast.success(`Found ${data.totalFound || 0} jobs across ${Object.keys(data.platforms || {}).length} platforms`, {
+                      description: platformInfo || `Searched: ${keywordPreview}`,
+                      duration: 5000,
+                    });
+                    return;
+                  }
+
                   setLastSearchResultCount(0);
                   toast.error('Search returned no results', {
                     description: 'Try different keywords or locations',
                   });
+                  return;
+                } catch (primaryError) {
+                  const msg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+
+                  // Fallback path: if Firecrawl isn't configured, still fetch jobs from public ATS APIs
+                  if (msg.includes('FIRECRAWL_API_KEY not configured')) {
+                    const { data, error } = await supabase.functions.invoke('scrape-jobs', {
+                      body: {
+                        keywords,
+                        offset: 0,
+                        limit: 150,
+                        user_id: user.id,
+                      },
+                    });
+
+                    if (error) throw error;
+
+                    if (data?.success) {
+                      await refetch();
+                      setLastSearchResultCount(data.totalValidJobs || data.jobs?.length || 0);
+                      toast.success(`Found ${data.jobs?.length || 0} jobs (fallback mode)`, {
+                        description: 'Using public ATS APIs (Greenhouse/Workable).',
+                        duration: 5000,
+                      });
+                      return;
+                    }
+                  }
+
+                  throw primaryError;
                 }
               } catch (error) {
                 console.error('Search error:', error);

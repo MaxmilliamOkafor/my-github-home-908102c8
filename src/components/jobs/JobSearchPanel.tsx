@@ -67,26 +67,51 @@ export function JobSearchPanel({ onSearchComplete, isSearching, setIsSearching }
     }
 
     setIsSearching(true);
-    
+
     try {
       toast.info(`Searching for ${parsedKeywords.length} keywords...`, { id: 'job-search' });
-      
-      const { data, error } = await supabase.functions.invoke('search-jobs-google', {
-        body: {
-          keywords: parsedKeywords.join(', '),
-          location: location === 'all' ? '' : location,
-          dateFilter,
-          user_id: user.id,
-        },
-      });
 
-      if (error) throw error;
+      // Primary path: wide coverage (requires FIRECRAWL_API_KEY configured on the backend)
+      try {
+        const { data, error } = await supabase.functions.invoke('search-jobs-google', {
+          body: {
+            keywords: parsedKeywords.join(', '),
+            location: location === 'all' ? '' : location,
+            dateFilter,
+            user_id: user.id,
+          },
+        });
 
-      if (data?.success) {
+        if (error) throw error;
+        if (!data?.success) throw new Error(data?.error || 'Search failed');
+
         toast.success(`Found ${data.totalFound} jobs!`, { id: 'job-search' });
         onSearchComplete();
-      } else {
-        throw new Error(data?.error || 'Search failed');
+        return;
+      } catch (primaryError) {
+        const msg = primaryError instanceof Error ? primaryError.message : String(primaryError);
+
+        // Fallback path: still return results even when Firecrawl isn't configured
+        if (msg.includes('FIRECRAWL_API_KEY not configured')) {
+          const { data, error } = await supabase.functions.invoke('scrape-jobs', {
+            body: {
+              keywords: parsedKeywords.join(', '),
+              offset: 0,
+              limit: 100,
+              user_id: user.id,
+            },
+          });
+
+          if (error) throw error;
+
+          if (data?.success) {
+            toast.success(`Found ${data.jobs?.length || 0} jobs (fallback mode)`, { id: 'job-search' });
+            onSearchComplete();
+            return;
+          }
+        }
+
+        throw primaryError;
       }
     } catch (error) {
       console.error('Job search error:', error);
