@@ -161,7 +161,7 @@
     // ============ BUILD EXPERIENCE SECTION ============
     // SINGLE SOURCE OF TRUTH: profile.work_experience
     // NEVER modify company, title, dates - only append keywords to bullets
-    // CLEAN LAYOUT: Line 1 = Company, Line 2 = Title – YYYY – YYYY
+    // LAYOUT: Single line with Company – Title on left, dates right-aligned, no pipes
     buildExperienceSection(data, keywords) {
       const experience = data.workExperience || data.work_experience || [];
       if (!Array.isArray(experience) || experience.length === 0) return [];
@@ -191,15 +191,8 @@
           .replace(/\s*–\s*/g, ' – ')    // ensure spaces around en dash
           : '';
         
-        // Build title line: Title – YYYY – YYYY
-        let titleLine = '';
-        if (title && normalisedDates) {
-          titleLine = `${title} – ${normalisedDates}`;
-        } else if (title) {
-          titleLine = title;
-        } else if (normalisedDates) {
-          titleLine = normalisedDates;
-        }
+        // Build left part: Company – Title (no pipes)
+        const leftPart = [company, title].filter(Boolean).join(' – ');
         
         const location = job.location || '';
         
@@ -253,7 +246,7 @@
         return {
           company,
           title,
-          titleLine, // New: formatted title with dates
+          leftPart, // New: Company – Title for single-line header
           dates: normalisedDates,
           location,
           bullets: enhancedBullets
@@ -348,14 +341,18 @@
         sections.push('');
       }
 
-      // Experience - Clean 2-line layout: Company on line 1, Title – Dates on line 2
+      // Experience - Single line: Company – Title (left), Dates (right), no pipes
       if (resumeData.experience.length > 0) {
         sections.push('WORK EXPERIENCE');
         resumeData.experience.forEach(job => {
-          // Line 1: Company
-          sections.push(job.company);
-          // Line 2: Title – YYYY – YYYY (use pre-formatted titleLine if available)
-          sections.push(job.titleLine || job.title);
+          // Single line: Company – Title    Dates (right-aligned in HTML, space-separated in text)
+          const leftPart = job.leftPart || [job.company, job.title].filter(Boolean).join(' – ');
+          if (leftPart && job.dates) {
+            sections.push(`${leftPart}    ${job.dates}`);
+          } else {
+            sections.push(leftPart || job.dates);
+          }
+          // Bullets with • (ATS-friendly)
           job.bullets.forEach(bullet => {
             sections.push(`• ${bullet}`);
           });
@@ -419,9 +416,11 @@
     .contact { text-align: center; color: #333; margin-bottom: 16px; font-size: 10.5pt; }
     .section-title { font-size: 12pt; font-weight: bold; text-transform: uppercase; border-bottom: 1px solid #000; margin: 16px 0 8px 0; padding-bottom: 4px; }
     .section-content { margin-bottom: 12px; }
-    .job-header { font-weight: bold; margin-top: 12px; }
-    .job-meta { font-size: 9pt; color: #333; margin-bottom: 4px; }
-    .bullet { margin-left: 16px; margin-bottom: 3px; }
+    .job-header { display: flex; justify-content: space-between; font-weight: bold; margin-top: 12px; }
+    .job-left, .job-right { white-space: nowrap; }
+    .job-right { font-weight: normal; font-size: 9pt; color: #333; }
+    ul.job-bullets { margin: 4px 0 0 16px; padding: 0; list-style-type: disc; }
+    ul.job-bullets li { margin-bottom: 3px; }
   </style>
 </head>
 <body>
@@ -439,9 +438,13 @@
   ${experience.length > 0 ? `
   <div class="section-title">Work Experience</div>
   ${experience.map(job => `
-  <div class="job-header">${escapeHtml(job.company)}</div>
-  <div class="job-meta">${escapeHtml(job.titleLine || job.title)}</div>
-  ${job.bullets.map(bullet => `<div class="bullet">• ${escapeHtml(bullet)}</div>`).join('')}
+  <div class="job-header">
+    <span class="job-left">${escapeHtml(job.leftPart || [job.company, job.title].filter(Boolean).join(' – '))}</span>
+    <span class="job-right">${escapeHtml(job.dates)}</span>
+  </div>
+  <ul class="job-bullets">
+    ${job.bullets.map(bullet => `<li>${escapeHtml(bullet)}</li>`).join('\n    ')}
+  </ul>
   `).join('')}
   ` : ''}
   

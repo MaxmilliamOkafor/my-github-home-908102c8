@@ -589,33 +589,35 @@
     }
     
     .cv-job-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
       margin-bottom: 4px;
     }
     
-    /* Company - Bold */
-    .cv-company {
+    .cv-job-left {
       font-weight: bold;
       font-size: 11pt;
+      white-space: nowrap;
     }
     
-    /* Job Title - Italic */
-    .cv-job-title {
-      font-style: italic;
-      font-size: ${ATS_CONFIG.fontSize.body};
-      color: ${ATS_CONFIG.colors.text};
-    }
-    
-    .cv-job-meta {
+    .cv-job-right {
       font-size: ${ATS_CONFIG.fontSize.small};
       color: ${ATS_CONFIG.colors.secondary};
+      white-space: nowrap;
     }
     
     .cv-job-details {
       margin-top: 4px;
     }
     
-    .cv-bullet {
-      margin-left: 16px;
+    .cv-job-bullets {
+      margin: 4px 0 0 16px;
+      padding: 0;
+      list-style-type: disc;
+    }
+    
+    .cv-job-bullets li {
       margin-bottom: 3px;
       line-height: ${ATS_CONFIG.lineHeight.normal};
     }
@@ -687,16 +689,16 @@
       ${experience.map((job, index) => `
       <div class="cv-job">
         <div class="cv-job-header">
-          <div class="cv-company">${escapeHtml(job.company)}</div>
-          <div class="cv-job-title">${escapeHtml(job.titleLine || job.title)}</div>
+          <span class="cv-job-left">\${escapeHtml([job.company, job.title].filter(Boolean).join(' – '))}</span>
+          <span class="cv-job-right">\${escapeHtml(job.dates || '')}</span>
         </div>
-        ${job.bullets.length > 0 ? \`
-        <div class="cv-job-details">
-          \${job.bullets.map(bullet => \`<div class="cv-bullet">• \${escapeHtml(bullet)}</div>\`).join('\\n          ')}
-        </div>
+        \${job.bullets.length > 0 ? \`
+        <ul class="cv-job-bullets">
+          \${job.bullets.map(bullet => \`<li>\${escapeHtml(bullet)}</li>\`).join('\\n          ')}
+        </ul>
         \` : ''}
       </div>
-      `).join('\n      ')}
+      \`).join('\\n      ')}
     </div>
     ` : ''}
     
@@ -756,10 +758,14 @@
       if (experience.length > 0) {
         lines.push('WORK EXPERIENCE');
         experience.forEach(job => {
-          // Line 1: Company
-          lines.push(job.company);
-          // Line 2: Title – YYYY – YYYY (use pre-formatted titleLine)
-          lines.push(job.titleLine || job.title);
+          // Single line: Company – Title    Dates (right-aligned in HTML, space-separated in text)
+          const leftPart = [job.company, job.title].filter(Boolean).join(' – ');
+          if (leftPart && job.dates) {
+            lines.push(`${leftPart}    ${job.dates}`);
+          } else {
+            lines.push(leftPart || job.dates);
+          }
+          // Use • bullets for ATS compatibility
           job.bullets.forEach(bullet => {
             lines.push(`• ${bullet}`);
           });
