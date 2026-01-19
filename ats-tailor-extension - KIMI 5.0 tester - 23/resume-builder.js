@@ -155,7 +155,7 @@
     
     // BUILD EXPERIENCE SECTION - SINGLE SOURCE OF TRUTH: profile.work_experience
     // NEVER modify company, title, dates - only append keywords to bullets
-    // CLEAN LAYOUT: Line 1 = Company, Line 2 = Title – YYYY – YYYY
+    // LAYOUT: Single line with Company – Title on left, dates right-aligned, no pipes
     buildExperienceSection(data, keywords) {
       // 1) SINGLE SOURCE OF TRUTH: structured work_experience from profile
       const experience = Array.isArray(data.workExperience)
@@ -173,8 +173,8 @@
 
       return experience
         .map((job) => {
-          // ---- HEADER: READ-ONLY from profile - use clean 2-line format ----
-          const companyLine = job.company || '';
+          // ---- HEADER: READ-ONLY from profile ----
+          const company = job.company || '';
           const title = job.title || '';
           
           // Build dates - normalise to "YYYY – YYYY" format with en dash and spaces
@@ -192,20 +192,21 @@
             .replace(/\s*–\s*/g, ' – ')    // ensure spaces around en dash
             : '';
           
-          // Build title line: Title – YYYY – YYYY
-          let titleLine = '';
-          if (title && normalisedDates) {
-            titleLine = `${title} – ${normalisedDates}`;
-          } else if (title) {
-            titleLine = title;
-          } else if (normalisedDates) {
-            titleLine = normalisedDates;
-          }
+          // Build left part: Company – Title (no pipes)
+          const leftPart = [company, title].filter(Boolean).join(' – ');
           
-          // Build clean 2-line header
-          const headerLines = [companyLine, titleLine].filter(Boolean).join('\n');
+          // Build header: left part + dates (for plain text, use space padding)
+          let headerLine = '';
+          if (leftPart && normalisedDates) {
+            headerLine = `${leftPart}    ${normalisedDates}`;
+          } else if (leftPart) {
+            headerLine = leftPart;
+          } else if (normalisedDates) {
+            headerLine = normalisedDates;
+          }
 
           // ---- BULLETS: Preserve original content, only APPEND keywords ----
+          // Use • (bullet) instead of - for ATS compatibility
           let bullets = job.bullets || job.achievements || job.responsibilities || [];
 
           if (typeof bullets === "string") {
@@ -216,7 +217,7 @@
           }
 
           if (!Array.isArray(bullets) || !bullets.length) {
-            return headerLines;
+            return headerLine;
           }
 
           const enhancedBullets = bullets.slice(0, maxBulletsPerRole).map((bullet, idx) => {
@@ -228,7 +229,7 @@
             if (idx >= 3 || !keywordArray.length) {
               // Ensure proper sentence ending
               if (text && !text.endsWith('.')) text += '.';
-              return `- ${text}`;
+              return `• ${text}`;
             }
 
             const bulletLower = text.toLowerCase();
@@ -247,7 +248,7 @@
 
             if (!toInject.length) {
               if (text && !text.endsWith('.')) text += '.';
-              return `- ${text}`;
+              return `• ${text}`;
             }
 
             // UK spelling for injection phrases
@@ -261,10 +262,10 @@
               text = `${text}, ${tail}.`;
             }
 
-            return `- ${text}`;
+            return `• ${text}`;
           }).filter(Boolean);
 
-          return `${headerLines}\n${enhancedBullets.join("\n")}`;
+          return `${headerLine}\n${enhancedBullets.join("\n")}`;
         })
         .join("\n\n");
     },
@@ -420,7 +421,11 @@
     .section-title { font-size: 12pt; font-weight: bold; border-bottom: 1px solid #000; margin: 16px 0 8px 0; padding-bottom: 4px; }
     .section-content { margin-bottom: 12px; }
     .bullet { margin-left: 16px; }
-    .job-header { font-weight: bold; margin-top: 12px; }
+    .job-header { display: flex; justify-content: space-between; font-weight: bold; margin-top: 12px; }
+    .job-left, .job-right { white-space: nowrap; }
+    .job-right { font-weight: normal; }
+    ul.job-bullets { margin: 4px 0 0 16px; padding: 0; list-style-type: disc; }
+    ul.job-bullets li { margin-bottom: 3px; }
   </style>
 </head>
 <body>
