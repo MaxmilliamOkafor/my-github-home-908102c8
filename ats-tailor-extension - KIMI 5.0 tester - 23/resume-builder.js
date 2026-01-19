@@ -155,6 +155,7 @@
     
     // BUILD EXPERIENCE SECTION - SINGLE SOURCE OF TRUTH: profile.work_experience
     // NEVER modify company, title, dates - only append keywords to bullets
+    // CLEAN LAYOUT: Line 1 = Company, Line 2 = Title – YYYY – YYYY
     buildExperienceSection(data, keywords) {
       // 1) SINGLE SOURCE OF TRUTH: structured work_experience from profile
       const experience = Array.isArray(data.workExperience)
@@ -172,30 +173,37 @@
 
       return experience
         .map((job) => {
-          // ---- HEADER: READ-ONLY from profile - NEVER modify ----
-          const company = job.company || '';
+          // ---- HEADER: READ-ONLY from profile - use clean 2-line format ----
+          const companyLine = job.company || '';
           const title = job.title || '';
           
-          // Build dates - avoid duplicating "Present" or year ranges
-          let dates = '';
-          if (job.dates) {
-            dates = job.dates;
-          } else if (job.startDate || job.endDate) {
+          // Build dates - normalise to "YYYY – YYYY" format with en dash and spaces
+          let dates = job.dates || '';
+          if (!dates && (job.startDate || job.endDate)) {
             const start = job.startDate || '';
             const end = job.endDate || 'Present';
             dates = start ? `${start} - ${end}` : end;
           }
           
-          const location = job.location || '';
-
-          // Build header line: Company | Title | Dates | Location
-          const headerParts = [];
-          if (company) headerParts.push(company);
-          if (title) headerParts.push(title);
-          if (dates) headerParts.push(dates);
-          if (location) headerParts.push(location);
-
-          const headerLine = headerParts.join(" | ");
+          // Normalise date format: replace hyphens with en dash, ensure spaces around it
+          const normalisedDates = dates ? String(dates)
+            .replace(/--/g, '–')           // double hyphen to en dash
+            .replace(/-/g, '–')            // single hyphen to en dash  
+            .replace(/\s*–\s*/g, ' – ')    // ensure spaces around en dash
+            : '';
+          
+          // Build title line: Title – YYYY – YYYY
+          let titleLine = '';
+          if (title && normalisedDates) {
+            titleLine = `${title} – ${normalisedDates}`;
+          } else if (title) {
+            titleLine = title;
+          } else if (normalisedDates) {
+            titleLine = normalisedDates;
+          }
+          
+          // Build clean 2-line header
+          const headerLines = [companyLine, titleLine].filter(Boolean).join('\n');
 
           // ---- BULLETS: Preserve original content, only APPEND keywords ----
           let bullets = job.bullets || job.achievements || job.responsibilities || [];
@@ -208,7 +216,7 @@
           }
 
           if (!Array.isArray(bullets) || !bullets.length) {
-            return headerLine;
+            return headerLines;
           }
 
           const enhancedBullets = bullets.slice(0, maxBulletsPerRole).map((bullet, idx) => {
@@ -256,7 +264,7 @@
             return `- ${text}`;
           }).filter(Boolean);
 
-          return `${headerLine}\n${enhancedBullets.join("\n")}`;
+          return `${headerLines}\n${enhancedBullets.join("\n")}`;
         })
         .join("\n\n");
     },

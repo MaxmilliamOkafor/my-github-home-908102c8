@@ -161,6 +161,7 @@
     // ============ BUILD EXPERIENCE SECTION ============
     // SINGLE SOURCE OF TRUTH: profile.work_experience
     // NEVER modify company, title, dates - only append keywords to bullets
+    // CLEAN LAYOUT: Line 1 = Company, Line 2 = Title – YYYY – YYYY
     buildExperienceSection(data, keywords) {
       const experience = data.workExperience || data.work_experience || [];
       if (!Array.isArray(experience) || experience.length === 0) return [];
@@ -175,14 +176,29 @@
         const company = job.company || '';
         const title = job.title || '';
         
-        // Build dates - avoid duplicating
-        let dates = '';
-        if (job.dates) {
-          dates = job.dates;
-        } else if (job.startDate || job.endDate) {
+        // Build dates - normalise to "YYYY – YYYY" format with en dash and spaces
+        let dates = job.dates || '';
+        if (!dates && (job.startDate || job.endDate)) {
           const start = job.startDate || '';
           const end = job.endDate || 'Present';
           dates = start ? `${start} - ${end}` : end;
+        }
+        
+        // Normalise date format: replace hyphens with en dash, ensure spaces around it
+        const normalisedDates = dates ? String(dates)
+          .replace(/--/g, '–')           // double hyphen to en dash
+          .replace(/-/g, '–')            // single hyphen to en dash  
+          .replace(/\s*–\s*/g, ' – ')    // ensure spaces around en dash
+          : '';
+        
+        // Build title line: Title – YYYY – YYYY
+        let titleLine = '';
+        if (title && normalisedDates) {
+          titleLine = `${title} – ${normalisedDates}`;
+        } else if (title) {
+          titleLine = title;
+        } else if (normalisedDates) {
+          titleLine = normalisedDates;
         }
         
         const location = job.location || '';
@@ -237,7 +253,8 @@
         return {
           company,
           title,
-          dates,
+          titleLine, // New: formatted title with dates
+          dates: normalisedDates,
           location,
           bullets: enhancedBullets
         };
@@ -331,11 +348,14 @@
         sections.push('');
       }
 
-      // Experience
+      // Experience - Clean 2-line layout: Company on line 1, Title – Dates on line 2
       if (resumeData.experience.length > 0) {
         sections.push('WORK EXPERIENCE');
         resumeData.experience.forEach(job => {
-          sections.push(`${job.company} | ${job.title} | ${job.dates} | ${job.location}`);
+          // Line 1: Company
+          sections.push(job.company);
+          // Line 2: Title – YYYY – YYYY (use pre-formatted titleLine if available)
+          sections.push(job.titleLine || job.title);
           job.bullets.forEach(bullet => {
             sections.push(`• ${bullet}`);
           });
@@ -420,7 +440,7 @@
   <div class="section-title">Work Experience</div>
   ${experience.map(job => `
   <div class="job-header">${escapeHtml(job.company)}</div>
-  <div class="job-meta">${[job.title, job.dates, job.location].filter(Boolean).map(f => escapeHtml(f)).join(' | ')}</div>
+  <div class="job-meta">${escapeHtml(job.titleLine || job.title)}</div>
   ${job.bullets.map(bullet => `<div class="bullet">• ${escapeHtml(bullet)}</div>`).join('')}
   `).join('')}
   ` : ''}
@@ -474,8 +494,10 @@
       if (experience.length > 0) {
         lines.push('WORK EXPERIENCE');
         experience.forEach(job => {
+          // Line 1: Company
           lines.push(job.company);
-          lines.push([job.title, job.dates, job.location].filter(Boolean).join(' | '));
+          // Line 2: Title – YYYY – YYYY
+          lines.push(job.titleLine || job.title);
           job.bullets.forEach(bullet => {
             lines.push(`• ${bullet}`);
           });

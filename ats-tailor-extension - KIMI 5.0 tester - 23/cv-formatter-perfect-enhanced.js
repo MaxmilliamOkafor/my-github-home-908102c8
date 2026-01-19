@@ -325,6 +325,16 @@
       }
     },
 
+    // ============ DATE NORMALISATION HELPERS ============
+    // Normalise dates to "YYYY – YYYY" format with en dash and spaces
+    normaliseDates(dateStr) {
+      if (!dateStr) return '';
+      return String(dateStr)
+        .replace(/--/g, '–')           // double hyphen to en dash
+        .replace(/-/g, '–')            // single hyphen to en dash  
+        .replace(/\s*–\s*/g, ' – ');   // ensure spaces around en dash
+    },
+
     // ============ DATE PATTERN FOR CLEANING ============
     // Matches date patterns like: 2023-01 - Present, Jan 2023 - Dec 2024, 2021-2023, etc.
     DATE_PATTERNS: [
@@ -345,7 +355,7 @@
       return cleaned.replace(/\s*\|\s*$/, '').replace(/^\s*\|\s*/, '').replace(/\s{2,}/g, ' ').trim();
     },
 
-    // Convert dates to year-only format (e.g., "Jan 2020 - Dec 2023" -> "2020 - 2023")
+    // Convert dates to year-only format (e.g., "Jan 2020 - Dec 2023" -> "2020 – 2023")
     toYearOnly(dateStr) {
       if (!dateStr) return '';
       // Extract all 4-digit years
@@ -353,13 +363,13 @@
       const hasPresent = /present|current|now/i.test(dateStr);
       
       if (hasPresent && years && years.length >= 1) {
-        return `${years[0]} - Present`;
+        return `${years[0]} – Present`;
       } else if (years && years.length >= 2) {
-        return `${years[0]} - ${years[1]}`;
+        return `${years[0]} – ${years[1]}`;
       } else if (years && years.length === 1) {
         return years[0];
       }
-      return dateStr; // Return original if no years found
+      return this.normaliseDates(dateStr); // Return normalised if no years found
     },
 
     // ============ PARSE EXPERIENCE ============
@@ -441,10 +451,22 @@
             title = temp;
           }
           
+          // Build titleLine: Title – YYYY – YYYY (using en dash with spaces)
+          const yearDates = this.toYearOnly(dates);
+          let titleLine = '';
+          if (title && yearDates) {
+            titleLine = `${title} – ${yearDates}`;
+          } else if (title) {
+            titleLine = title;
+          } else if (yearDates) {
+            titleLine = yearDates;
+          }
+          
           // NO location - removed to prevent recruiter bias
           currentJob = {
             company: company,
             title: title,
+            titleLine: titleLine, // New: formatted "Title – YYYY – YYYY"
             dates: dates,
             bullets: []
           };
@@ -800,22 +822,19 @@
     ${experience.length > 0 ? `
     <div class="cv-section">
       <div class="cv-section-title">Work Experience</div>
-      ${experience.map((job, index) => `
+      ${experience.map((job, index) => \`
       <div class="cv-job">
         <div class="cv-job-header">
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <span class="cv-company">${escapeHtml(this.stripDatesFromField(job.company))}</span>
-            ${job.dates ? `<span style="font-size: 9pt; color: #333;">${escapeHtml(this.toYearOnly(job.dates))}</span>` : ''}
-          </div>
-          <div class="cv-job-title">${escapeHtml(this.stripDatesFromField(job.title))}</div>
+          <div class="cv-company">\${escapeHtml(job.company)}</div>
+          <div class="cv-job-title">\${escapeHtml(job.titleLine || job.title)}</div>
         </div>
-        ${job.bullets.length > 0 ? `
+        \${job.bullets.length > 0 ? \`
         <div class="cv-job-details">
-          ${job.bullets.map(bullet => `<div class="cv-bullet">• ${escapeHtml(bullet)}</div>`).join('\n          ')}
+          \${job.bullets.map(bullet => \`<div class="cv-bullet">• \${escapeHtml(bullet)}</div>\`).join('\\n          ')}
         </div>
-        ` : ''}
+        \` : ''}
       </div>
-      `).join('\n      ')}
+      \`).join('\\n      ')}
     </div>
     ` : ''}
     
@@ -882,13 +901,10 @@
       if (experience.length > 0) {
         lines.push('WORK EXPERIENCE');
         experience.forEach(job => {
-          // Company + dates on same line (dates right-aligned in rendered versions)
-          const cleanCompany = this.stripDatesFromField(job.company);
-          const cleanTitle = this.stripDatesFromField(job.title);
-          const yearDates = this.toYearOnly(job.dates);
-          lines.push(yearDates ? `${cleanCompany}    ${yearDates}` : cleanCompany);
-          // Job title on its own line (italic in rendered versions)
-          lines.push(cleanTitle);
+          // Line 1: Company
+          lines.push(job.company);
+          // Line 2: Title – YYYY – YYYY (use pre-formatted titleLine)
+          lines.push(job.titleLine || job.title);
           job.bullets.forEach(bullet => {
             lines.push(`• ${bullet}`);
           });
