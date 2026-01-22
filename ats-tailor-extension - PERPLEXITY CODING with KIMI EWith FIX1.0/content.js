@@ -1827,37 +1827,76 @@
       }
     };
 
-    const fetchWithTimeout = async (url, options, timeoutMs, label) => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const fetchWithTimeout = async (url, options, timeoutMs, label, maxRetries = 2) => {
+      let lastError = null;
+      
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        // Create a NEW AbortController for each attempt
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      const startedAt = performance.now();
-      await logEvent('fetch_start', { label, timeoutMs, url });
+        const startedAt = performance.now();
+        await logEvent('fetch_start', { label, timeoutMs, url, attempt });
 
-      try {
-        const res = await fetch(url, {
-          ...options,
-          signal: controller.signal,
-        });
-        await logEvent('fetch_end', {
-          label,
-          ok: res.ok,
-          status: res.status,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-        return res;
-      } catch (err) {
-        const isAbort = err?.name === 'AbortError';
-        await logEvent('fetch_error', {
-          label,
-          isAbort,
-          durationMs: Math.round(performance.now() - startedAt),
-          message: String(err?.message || err),
-        });
-        throw err;
-      } finally {
-        clearTimeout(timeoutId);
+        try {
+          const res = await fetch(url, {
+            ...options,
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          
+          await logEvent('fetch_end', {
+            label,
+            ok: res.ok,
+            status: res.status,
+            durationMs: Math.round(performance.now() - startedAt),
+            attempt,
+          });
+          return res;
+        } catch (err) {
+          clearTimeout(timeoutId);
+          
+          const isAbort = err?.name === 'AbortError';
+          const durationMs = Math.round(performance.now() - startedAt);
+          
+          await logEvent('fetch_error', {
+            label,
+            isAbort,
+            durationMs,
+            message: String(err?.message || err),
+            attempt,
+          });
+          
+          lastError = err;
+          
+          // If AbortError from timeout (long duration) or network error, retry
+          if (isAbort && durationMs < timeoutMs - 1000) {
+            // Aborted quickly (< timeout-1s) means external signal cancelled - don't retry
+            const friendlyError = new Error(`Request cancelled — please retry. (${label})`);
+            friendlyError.name = 'AbortError';
+            friendlyError.isExternalAbort = true;
+            throw friendlyError;
+          }
+          
+          // Retry on timeout or network errors
+          if (attempt < maxRetries) {
+            const backoffMs = Math.min(1000 * Math.pow(2, attempt), 5000);
+            console.log(`[ATS Tailor] Retrying ${label} in ${backoffMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+            await new Promise(r => setTimeout(r, backoffMs));
+            continue;
+          }
+          
+          // All retries exhausted
+          if (isAbort) {
+            const friendlyError = new Error(`Request timed out after ${Math.round(timeoutMs/1000)}s — server took too long to respond. Please retry.`);
+            friendlyError.name = 'TimeoutError';
+            throw friendlyError;
+          }
+          throw err;
+        }
       }
+      
+      throw lastError;
     };
 
     if (hasTriggeredTailor || tailoringInProgress) {
@@ -2096,9 +2135,27 @@
 
       console.error('[ATS Tailor] Auto-tailor error:', error);
 
-      // Previously we silently continued; now we surface a lightweight banner message
-      // to avoid “stuck” perception, while still keeping the automation resilient.
-      updateBanner('Tailoring failed — open popup to retry', 'error');
+      // Provide user-friendly error messages based on error type
+      let bannerMessage = 'Tailoring failed - open popup to retry';
+      
+      if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+        if (error?.isExternalAbort) {
+          bannerMessage = 'Request cancelled - open popup to retry';
+        } else {
+          bannerMessage = 'Server timed out - please retry via popup';
+        }
+      } else if (error?.message?.includes('network') || error?.message?.includes('fetch')) {
+        bannerMessage = 'Network error - check connection and retry';
+      } else if (error?.message?.includes('502') || error?.message?.includes('503') || error?.message?.includes('504')) {
+        bannerMessage = 'Server temporarily unavailable - retry in a moment';
+      } else if (error?.message?.includes('signal is aborted')) {
+        bannerMessage = 'Request cancelled - please retry via popup';
+      }
+      
+      updateBanner(bannerMessage, 'error');
+      
+      // Allow retry after error
+      hasTriggeredTailor = false;
 
     } finally {
       clearTimeout(watchdogId);
