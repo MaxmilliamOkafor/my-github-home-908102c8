@@ -1820,23 +1820,83 @@ class ATSTailor {
       return;
     }
     
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      this.showToast('Please enter a valid email address', 'error');
+      return;
+    }
+    
     loginBtn.disabled = true;
     loginBtn.textContent = 'Signing in...';
     
+    // Create AbortController with timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    
     try {
+      console.log('[ATS Tailor] Attempting login for:', email);
+      
       const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'apikey': SUPABASE_ANON_KEY
         },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, password }),
+        signal: controller.signal
       });
       
-      const data = await response.json();
+      clearTimeout(timeoutId);
+      
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('[ATS Tailor] Failed to parse login response:', parseError);
+        throw new Error('Server returned invalid response. Please try again.');
+      }
+      
+      console.log('[ATS Tailor] Login response status:', response.status);
       
       if (!response.ok) {
-        throw new Error(data.error_description || data.error || 'Login failed');
+        // Map common Supabase auth errors to user-friendly messages
+        const errorMsg = data.error_description || data.error || data.msg || '';
+        const errorCode = data.error_code || '';
+        
+        if (response.status === 400) {
+          if (errorMsg.includes('Invalid login credentials') || errorCode === 'invalid_credentials') {
+            throw new Error('Invalid email or password. Please check and try again.');
+          }
+          if (errorMsg.includes('Email not confirmed')) {
+            throw new Error('Please confirm your email before logging in. Check your inbox.');
+          }
+          throw new Error(errorMsg || 'Invalid credentials. Please try again.');
+        }
+        
+        if (response.status === 401) {
+          throw new Error('Authentication failed. Please check your credentials.');
+        }
+        
+        if (response.status === 422) {
+          throw new Error('Invalid email format or password too short.');
+        }
+        
+        if (response.status === 429) {
+          throw new Error('Too many login attempts. Please wait a few minutes.');
+        }
+        
+        if (response.status >= 500) {
+          throw new Error('Server error. Please try again in a moment.');
+        }
+        
+        throw new Error(errorMsg || `Login failed (${response.status})`);
+      }
+      
+      // Validate response has required fields
+      if (!data.access_token || !data.user) {
+        console.error('[ATS Tailor] Invalid login response structure:', data);
+        throw new Error('Login succeeded but response was incomplete. Please try again.');
       }
       
       this.session = {
@@ -1846,6 +1906,7 @@ class ATSTailor {
       };
       
       await this.saveSession();
+      console.log('[ATS Tailor] Login successful for:', data.user.email);
       this.showToast('Logged in successfully!', 'success');
       this.updateUI();
       
@@ -1855,8 +1916,21 @@ class ATSTailor {
       }
       
     } catch (error) {
-      console.error('Login error:', error);
-      this.showToast(error.message || 'Login failed', 'error');
+      clearTimeout(timeoutId);
+      console.error('[ATS Tailor] Login error:', error);
+      
+      let userMessage = error.message || 'Login failed';
+      
+      // Handle specific error types
+      if (error.name === 'AbortError') {
+        userMessage = 'Login timed out. Please check your connection and try again.';
+      } else if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+        userMessage = 'Network error. Please check your internet connection.';
+      } else if (error.message?.includes('net::ERR_')) {
+        userMessage = 'Connection failed. Please check if you are online.';
+      }
+      
+      this.showToast(userMessage, 'error');
     } finally {
       loginBtn.disabled = false;
       loginBtn.textContent = 'Sign In';
