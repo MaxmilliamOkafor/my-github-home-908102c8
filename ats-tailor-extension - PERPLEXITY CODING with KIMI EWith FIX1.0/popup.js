@@ -2760,50 +2760,83 @@ class ATSTailor {
       const providerName = this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI';
       updateProgress(35, `Step 2/3: ${providerName} generating tailored documents...`);
 
-      const tailorController = new AbortController();
-      const tailorTimeoutId = setTimeout(() => tailorController.abort(), 75_000);
+      // Robust fetch with timeout, retry, and proper AbortError handling
+      const fetchWithRetry = async (url, options, timeoutMs, maxRetries = 2) => {
+        let lastError = null;
+        
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+          
+          try {
+            const res = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timeoutId);
+            return res;
+          } catch (err) {
+            clearTimeout(timeoutId);
+            lastError = err;
+            
+            if (err?.name === 'AbortError') {
+              // Check if this was a quick abort (external) vs timeout
+              if (attempt < maxRetries) {
+                const backoffMs = Math.min(1000 * Math.pow(2, attempt), 5000);
+                console.log(`[ATS Tailor] Retrying tailor-application in ${backoffMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+                await new Promise(r => setTimeout(r, backoffMs));
+                continue;
+              }
+              throw new Error('Request timed out — server took too long to respond. Please retry.');
+            }
+            throw err;
+          }
+        }
+        throw lastError;
+      };
 
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/tailor-application`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.session.access_token}`,
-          apikey: SUPABASE_ANON_KEY,
-        },
-        signal: tailorController.signal,
-        body: JSON.stringify({
-          jobTitle: this.currentJob.title || '',
-          company: this.currentJob.company || '',
-          location: this.currentJob.location || '',
-          description: this.currentJob.description || '',
-          requirements: [],
-          aiProvider: this.aiProvider, // Pass selected AI provider
-          userProfile: {
-            firstName: p.first_name || '',
-            lastName: p.last_name || '',
-            email: p.email || this.session.user.email || '',
-            phone: p.phone || '',
-            linkedin: p.linkedin || '',
-            github: p.github || '',
-            portfolio: p.portfolio || '',
-            coverLetter: p.cover_letter || '',
-            professionalExperience: Array.isArray(p.professional_experience) ? p.professional_experience : [],
-            education: Array.isArray(p.education) ? p.education : [],
-            skills: Array.isArray(p.skills) ? p.skills : [],
-            certifications: Array.isArray(p.certifications) ? p.certifications : [],
+      const response = await fetchWithRetry(
+        `${SUPABASE_URL}/functions/v1/tailor-application`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.session.access_token}`,
+            apikey: SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            jobTitle: this.currentJob.title || '',
+            company: this.currentJob.company || '',
+            location: this.currentJob.location || '',
+            description: this.currentJob.description || '',
+            requirements: [],
+            aiProvider: this.aiProvider, // Pass selected AI provider
+            userProfile: {
+              firstName: p.first_name || '',
+              lastName: p.last_name || '',
+              email: p.email || this.session.user.email || '',
+              phone: p.phone || '',
+              linkedin: p.linkedin || '',
+              github: p.github || '',
+              portfolio: p.portfolio || '',
+              coverLetter: p.cover_letter || '',
+              professionalExperience: Array.isArray(p.professional_experience) ? p.professional_experience : [],
+              education: Array.isArray(p.education) ? p.education : [],
+              skills: Array.isArray(p.skills) ? p.skills : [],
+              certifications: Array.isArray(p.certifications) ? p.certifications : [],
             achievements: Array.isArray(p.achievements) ? p.achievements : [],
             atsStrategy: p.ats_strategy || '',
             city: this._defaultLocation,
             country: p.country || undefined,
             address: p.address || undefined,
             state: p.state || undefined,
-            zipCode: p.zip_code || undefined,
-            // Pass CV file info so backend knows user has uploaded a base CV
-            cvFilePath: p.cv_file_path || undefined,
-            cvFileName: p.cv_file_name || undefined,
-          },
-        }),
-      }).finally(() => clearTimeout(tailorTimeoutId));
+              zipCode: p.zip_code || undefined,
+              // Pass CV file info so backend knows user has uploaded a base CV
+              cvFilePath: p.cv_file_path || undefined,
+              cvFileName: p.cv_file_name || undefined,
+            },
+          }),
+        },
+        90_000, // 90 second timeout
+        2 // max 2 retries
+      );
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
@@ -3046,8 +3079,19 @@ class ATSTailor {
 
     } catch (error) {
       console.error('Tailoring error:', error);
-      this.showToast(error.message || 'Failed', 'error');
-      this.setStatus('Error', 'error');
+      
+      // Provide user-friendly error messages
+      let errorMessage = error.message || 'Failed';
+      if (error?.name === 'AbortError' || errorMessage.includes('timed out')) {
+        errorMessage = 'Request timed out — please retry';
+      } else if (errorMessage.includes('502') || errorMessage.includes('503')) {
+        errorMessage = 'Server temporarily unavailable — retry in a moment';
+      } else if (errorMessage.includes('signal is aborted')) {
+        errorMessage = 'Request was cancelled — please retry';
+      }
+      
+      this.showToast(errorMessage, 'error');
+      this.setStatus('Error — retry', 'error');
     } finally {
       btn.disabled = false;
       btn.classList.remove('btn-tailoring');
